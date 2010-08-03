@@ -65,6 +65,9 @@ class NewmanTestCase(SeleniumTestCase):
                 'articles' : "//a[@class='app article']",
                 'article_add' : "//a[@class='app article']/../a[position()=2]",
                 'galleries' : "//a[@class='app gallery']",
+                'gallery_add' : "//a[@class='app gallery']/../a[position()=2]",
+                'surveys' : "//a[@class='app survey']",
+                'survey_add' : "//a[@class='app survey']/../a[position()=2]",
             },
             'controls' : {
                 'suggester' : "//div[@class='suggest-bubble']",
@@ -74,11 +77,18 @@ class NewmanTestCase(SeleniumTestCase):
                     'ok': "//div[@id='opmsg']/span[@class='okmsg']",
                 },
                 'add' : "//a[@class='js-hashadr icn btn add']",
-                'save' : "//a[@class='js-submit icn btn save def']",
+                'save' : "//a[@class='js-submit icn btn save def default-button-ok']",
+                'save_draft' : "//a[@class='icn btn save'][@id='save-form']",
+                'combobox_drafts': "//select[@id='id_drafts']",
+                'popup_ok' : "//input[@id='popup_ok']",
+                'help' : "//a[@class='icn btn help js-simpleload']",
                 'show_filters' : "//div[@id='filters-handler']/a[position()=1]",
                 'lookup_content' : "//div[@id='changelist']/form/table/tbody/tr/th/a[text()='%(text)s']",
                 'search_button' : "//a[@class='btn icn search def']",
                 'paginator_top' : "//div[@id='changelist']/form/p[1]",
+                'overlay': "//div[@id='overlay-content-main']/div[@id='changelist']/form[@class='js-form js-dyn-adr']/table",
+                'message_bubble' : "//div[@id='opmsg']/span",
+                'placement_default_category_button': "//a[@class='icn btn addfav js-placement-main-category']",
             },
             'pages' : {
                 'login' : {
@@ -87,9 +97,13 @@ class NewmanTestCase(SeleniumTestCase):
                 'listing' : {
                     'first_object' : "//div[@id='changelist']/form/table/tbody/tr[position()='1']",
                     'object' : "//div[@id='changelist']/form/table/tbody/tr[position()='%(position)s']",
-                    'object_href' : "//div[@id='changelist']/form/table/tbody/tr[position()='%(position)s']/th/a[position()=2]",
-                    'datepicker' : "//td[@class='%(field)s']/span[@class='dtpicker-trigger']",
+                    'object_href' : "//div[@id='changelist']/form/table/tbody/tr[position()='%(position)s']/th/a[position()=%(a_position)d]",
+                    'datepicker' : "//td[@class='%(field)s']/span[@class='js-dtpicker-trigger']",
                     'calendar_day' : "//table[@class='ui-datepicker-calendar']/tbody/tr/td/a[text()='%(day)s']",
+                },
+                'gallery': {
+                    'item': "//div[@class='gallery-item']/a[@id='%(id)s']",
+                    'item_input': "//div[@class='gallery-item']/descendant::*/input[@id='%(id)s']",
                 }
             }
         }
@@ -122,9 +136,10 @@ class NewmanTestCase(SeleniumTestCase):
             'position' : position
         }
 
-    def get_listing_object_href(self, position=1):
+    def get_listing_object_href(self, position=1, a_element_position=2):
         return self.elements['pages']['listing']['object_href'] % {
-            'position' : position
+            'position' : position,
+            'a_position': a_element_position
         }
 
     def fill_fields(self, data):

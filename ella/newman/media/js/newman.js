@@ -1,3 +1,29 @@
+/** 
+ * Newman specific things used in conjunction with Kobayashi.
+ * requires: jQuery 1.4.2+, 
+ *          gettext() function.
+ *          carp(),
+ *          adr(),
+ *          get_adr(),
+ *          get_hashadr(),
+ *          str_concat(),
+ *          timer(), timerEnd(),
+ *          Kobayashi object.
+ *
+ * provides:
+ *          lock_window()  locks window to prevent user clicking anywhere,
+ *          unlock_window(),
+ *          show_err() shows error bubble,
+ *          show_ok() show bubble (should be used for messages like 'Object saved', 'Data loaded', etc.),
+ *          show_loading(),
+ *          hide_loading(),
+ *          show_ajax_error(xhr),
+ *          show_ajax_success(response_text),
+ *          Drafts object,
+ *          NewmanLib object,
+ *          AjaxFormLib object.
+ *
+ */
 var LF = 10;
 var CR = 13;
 var ASCII_PRINTABLE_BEGIN = 32;
@@ -5,6 +31,7 @@ var ASCII_PRINTABLE_END = 126;
 var ASCII_BACKSPACE = 8;
 var ASCII_DELETE = 46;
 var UNICODE = 160;
+var DEFAULT_MESSAGE_BUBBLE_DURATION = 5000;
 
 // Set the default target for Kobayashi to #content
 Kobayashi.DEFAULT_TARGET = 'content';
@@ -16,6 +43,22 @@ BASES.content = '/nm/';
 if (typeof console != 'object') {
     console = {};
     console.log = function(){ return; };
+}
+
+/** Useful when method of an object should be used as jQuery event handler.
+ *  Example:
+ *  $(document).bind('hashchange', this_decorator(this, this.method) );
+ * 
+ *  Is much better than:
+ *  var me = this;
+ *  $(document).bind('hashchange', function () { me.method(); } );
+ */
+function this_decorator(context, fce) {
+    var me = this;
+    function wrap() {
+        return fce.apply(context, arguments);
+    }
+    return wrap;
 }
 
 // Containers for things we need to export
@@ -75,9 +118,9 @@ NewmanLib = {};
             call_callbacks_in_array(NewmanLib.post_save_callbacks, false, submit_succeeded);
         } catch(e) {
             if (once) {
-                carp('Error occured when calling post submit callback (once).' + e.toString());
+                carp('Error occured when calling post submit callback (once).' , e.toString());
             } else {
-                carp('Error occured when calling post submit callback.' + e.toString());
+                carp('Error occured when calling post submit callback.' , e.toString());
             }
         }
     }
@@ -91,9 +134,9 @@ NewmanLib = {};
             call_callbacks_in_array(NewmanLib.pre_submit_callbacks);
         } catch(e) {
             if (once) {
-                carp('Error occured when calling post submit callback (once).' + e.toString());
+                carp('Error occured when calling post submit callback (once).' , e.toString());
             } else {
-                carp('Error occured when calling post submit callback.' + e.toString());
+                carp('Error occured when calling post submit callback.' , e.toString());
             }
         }
     }
@@ -143,15 +186,23 @@ function clone_form($orig_form) {
 
 // Shows a modal window and disables its close button.
 function lock_window(msg) {
-    if ( ! msg ) msg = gettext('Wait')+'...';
+    if (lock_window.dependencies_loaded == false) {
+        lock_window.dependencies_loaded = true;
+        Kobayashi.load_media(MEDIA_URL + 'jquery/jquery-ui-smoothness.css', {callbacks: null});
+        Kobayashi.load_media(MEDIA_URL + 'jquery/jquery-ui.js', {callbacks: null});
+    }
+
+    if ( ! msg ) msg = str_concat( gettext('Wait'),'...' );
 
     var $modal = $('#window-lock');
     if ($modal.length == 0) $modal = $(
             '<div id="window-lock"></div>'
     ).html(
+        str_concat(
           '<p><img src="'
-        + MEDIA_URL + 'ico/15/loading.gif'
-        + '" alt="" /> <span id="lock-message"></span></p>'
+        , MEDIA_URL , 'ico/15/loading.gif'
+        , '" alt="" /> <span id="lock-message"></span></p>'
+        )
     ).appendTo('body').dialog({
         autoOpen: false,
         modal: true,
@@ -168,6 +219,7 @@ function lock_window(msg) {
 
     carp('Window Locked');
 }
+lock_window.dependencies_loaded = false;
 
 function raw_unlock_window() {
     $('#window-lock').data('close_ok', true).dialog('close');
@@ -215,10 +267,14 @@ $( function() {
 
 $(function(){Kobayashi.reload_content('content');});
 
-//// Lock window when media are being loaded
+function media_loading_start_handler() { 
+    timer('media_loading'); 
+    lock_window( str_concat(gettext('Loading media'), '...') );
+}
 
-$(document).bind('media_loading_start', function() { lock_window(gettext('Loading media')+'...'); });
-$(document).bind('media_loaded', unlock_window);
+//// Lock window when media are being loaded
+$(document).bind('media_loading_start', media_loading_start_handler);
+$(document).bind('media_loaded', function() {unlock_window(); timerEnd('media_loading'); });
 
 //// Drafts and templates
 Drafts = new Object;
@@ -232,7 +288,7 @@ Drafts = new Object;
         if (options.id   ) things_to_send.id    = options.id;
         var message = options.msg || gettext('Saved');
         var url = get_adr('draft/save/');
-        var $saving_msg = show_message(gettext('Saving')+'...', {duration: 0});
+        var $saving_msg = show_message( str_concat(gettext('Saving'), '...'), {duration: 0});
         $.ajax({
             url: url,
             data: things_to_send,
@@ -256,7 +312,11 @@ Drafts = new Object;
                         $('<option>').attr({value: id}).html(actual_title)
                     );
                 } catch(e) {
-                    show_err(gettext('Preset saved but erroneous result received.')+' '+gettext('Reload to see the preset.'));
+                    show_err(str_concat(
+                        gettext('Preset saved but erroneous result received.'),
+                        ' ',
+                        gettext('Reload to see the preset.')
+                    ));
                 }
             },
             error: function(xhr) {
@@ -266,9 +326,11 @@ Drafts = new Object;
         });
     }
     AjaxFormLib.save_preset = save_preset;
-    $('a#save-form').live('click', function() {
-        var title = prompt(gettext('Enter template name'));
-        if (title == null) return;
+
+    function save_preset_dialog(title) {
+        if (!title) {
+            return;
+        }
         title = $.trim(title);
         // retrieve the id of template with this name
         // TODO: to be rewritten (saving interface needs a lift)
@@ -278,6 +340,9 @@ Drafts = new Object;
             : draft_id;
         save_preset($('.change-form'), {title:title, id:id});
         return false;
+    }
+    $('a#save-form').live('click', function() {
+        jPrompt(gettext('Enter template name'), '', gettext('Enter template name'), save_preset_dialog);
     });
 
     function restore_initial_forms() {
@@ -311,20 +376,19 @@ Drafts = new Object;
             return;
         }
 
-        NewmanLib.debug_response_data = response_data;
         try {
-            //carp('Triggering preset_load_initiated event on ' + $form.selector);
+            //carp('Triggering preset_load_initiated event on ' , $form.selector);
             $form.trigger('preset_load_initiated', [response_data]);
         } catch (e) {
-            show_err('ERROR occured while triggering preset_load_initiated. id=' + id + ' Exception: ' + e.toString());
+            carp('ERROR occured while triggering preset_load_initiated. Exception: ' , e.toString());
         }
         //carp('Trigger preset_load_inititated done.');
 
         try {
-            //carp('Triggering preset_load_process event on ' + $form.selector);
+            //carp('Triggering preset_load_process event on ' , $form.selector);
             $form.trigger('preset_load_process', [response_data]);
         } catch (e) {
-            show_err('ERROR occured while triggering preset_load_process. id=' + id + ' Exception: ' + e.toString());
+            carp('ERROR occured while triggering preset_load_process. Exception: ' , e.toString());
         }
         //carp('Trigger preset_load_process done.');
 
@@ -346,9 +410,9 @@ Drafts = new Object;
                 occ_no = used_times[key];
             }
 
-            var $inputs = $form.find(':input[name='+key+']');
+            var $inputs = $form.find( str_concat(':input[name=',key,']') );
             if (!$inputs || $inputs.length == 0) {
-                //carp('restore_form: input #' + key + ' not found');
+                //carp('restore_form: input #' , key , ' not found');
                 continue;
             }
             // test whether large data (textarea) is processed
@@ -360,8 +424,8 @@ Drafts = new Object;
             );
             var val_esc = val.replace(/(\W)/g, '\\$1');
             if (!is_text_area) {
-                $inputs.filter(':checkbox,:radio').filter('[value='+val_esc+']').attr({checked: 'checked'});
-                $inputs.find('option[value='+val_esc+']').attr({selected: 'selected'});
+                $inputs.filter(':checkbox,:radio').filter( str_concat('[value=',val_esc,']') ).attr({checked: 'checked'});
+                $inputs.find( str_concat('option[value=',val_esc,']') ).attr({selected: 'selected'});
             }
             $inputs.filter(':text,[type=hidden],textarea').eq(occ_no).val(val);
 
@@ -376,7 +440,7 @@ Drafts = new Object;
         try {
             $form.trigger('preset_load_completed', [response_data, args]);
         } catch (e) {
-            show_err('ERROR occured while triggering preset_load_completed. id=' + id + ' Exception: ' + e.toString());
+            carp('ERROR occured while triggering preset_load_completed. '  , ' Exception: ' , e.toString());
         }
     }
     NewmanLib.restore_form = restore_form;
@@ -396,9 +460,11 @@ Drafts = new Object;
     function load_draft_handler() {
         var id = $(this).val();
         if (!id) return;
+        timer('load_draft');
         lock_window();
         load_preset(id, $('.change-form'));
         unlock_window();
+        timerEnd('load_draft');
     }
 
     function set_load_draft_handler() {
@@ -414,7 +480,7 @@ Drafts = new Object;
             data: {id:id},
             success: function(response_text) {
                 show_ajax_success(response_text);
-                $('#id_drafts option[value='+id+']').remove();
+                $( str_concat('#id_drafts option[value=',id,']') ).remove();
             },
             error: show_ajax_error
         });
@@ -423,7 +489,7 @@ Drafts = new Object;
     // Delete crash save on restoration
     $(document).bind('preset_load_completed', function(evt, response_data, args) {
         var id = args.preset_id;
-        var name = $('#id_drafts option[value='+id+']').text();
+        var name = $( str_concat('#id_drafts option[value=',id,']') ).text();
         if (/^\* /.test( name )) {
             delete_preset(id);
         }
@@ -472,7 +538,7 @@ Drafts = new Object;
                     autosave_interval = undefined;
                     return;
                 }
-                carp('Saving draft '+new Date());
+                carp('Saving draft ', new Date());
                 save_preset($change_form, {id: draft_id});
             }, 60 * 1000 );
         }
@@ -546,7 +612,7 @@ $( function() {
         var ok = true;
         $('.form-error-msg,.non-field-errors').remove();
         get_inputs($form).each( function() {
-            var $label = $('label[for='+this.id+']');
+            var $label = $( str_concat('label[for=',this.id,']') );
             $('#err-overlay').empty().hide();
             var classes = ($label.attr('className')||'').split(/\s+/);
             for (var i = 0; i < classes.length; i++) {
@@ -571,7 +637,10 @@ $( function() {
     // Submit event
     function ajax_submit($form, button_name, process_redirect) {
         if (!$form.jquery) $form = $($form);
-        if ( ! validate($form) ) return false;
+        if ( ! validate($form) ) {
+            unlock_window();
+            return false;
+        }
         NewmanLib.call_pre_submit_callbacks();
         carp(['ajax_submit: submitting... selector="', $form.selector, '"'].join(''));
 
@@ -583,7 +652,7 @@ $( function() {
         if (has_files) {
             // Shave off the names from suggest-enhanced hidden inputs
             $form.find('input:hidden').each( function() {
-                if ($form.find( '#'+$(this).attr('id')+'_suggest' ).length == 0) return;
+                if ($form.find( str_concat('#',$(this).attr('id'),'_suggest') ).length == 0) return;
                 $(this).val( $(this).val().replace(/#.*/, '') );
             });
             // Shave off the days of week from date-time inputs
@@ -592,14 +661,15 @@ $( function() {
             } );
             $form.data('standard_submit', true);
             if (button_name) {
-                $form.append('<input type="hidden" value="1" name="'+button_name+'" />');
+                $form.append( str_concat('<input type="hidden" value="1" name="',button_name,'" />') );
             }
             $form.submit();
+            unlock_window();
             return true;
         }
         // End of hack for file inputs
 
-        lock_window(gettext('Sending')+'...');
+        lock_window( str_concat(gettext('Sending'), '...') );
 
         var action =  $form.attr('action');
         var method = ($form.attr('method') || 'POST').toUpperCase();
@@ -627,7 +697,7 @@ $( function() {
                 return;
             }
             // Shave off the names from suggest-enhanced hidden inputs
-            if ( $(this).is('input:hidden') && $form.find( '#'+$(this).attr('id')+'_suggest' ).length ) {
+            if ( $(this).is('input:hidden') && $form.find( str_concat('#',$(this).attr('id'),'_suggest') ).length ) {
                 $inputs = $inputs.add(   $(this).clone().val( $(this).val().replace(/#.*/, '') )   );
                 return;
             }
@@ -639,7 +709,7 @@ $( function() {
             $inputs = $inputs.add($(this));
         });
 
-        if (button_name) $inputs = $inputs.add('<input type="hidden" value="1" name="'+button_name+'" />');
+        if (button_name) $inputs = $inputs.add( str_concat('<input type="hidden" value="1" name="',button_name,'" />') );
         var data = $inputs.serialize();
         if ($form.hasClass('js-reset-on-submit')) $form.get(0).reset();
         var address = $form.hasClass('js-dyn-adr')
@@ -663,6 +733,7 @@ $( function() {
                         new_req.url = redirect_to;
                         new_req.redirect_to = redirect_to;
                         $.ajax( new_req );
+                        unlock_window();
                         return;
                     }
                 }
@@ -710,13 +781,31 @@ $( function() {
             $(input).removeClass('blink');
         }
 
+        function focus_errored_element(input_element) {
+            var MOVE_UP_PIXELS = 60;
+            var $inp = $(input_element);
+            var element_id = $inp.attr('id');
+            input_element.focus();
+            if (element_id != '') {
+                // try to find label and scroll div#content to viewport if neccessary
+                $label = $( str_concat('label[for=', element_id, ']') );
+                //log_generic.log('label:', $label, ' label for=', element_id);
+                var detector = new ContentElementViewportDetector($inp);
+                if (!detector.top_in_viewport()) {
+                    var $content = $('div#content');
+                    var existing_offset = $content.offset();
+                    $content.offset({top: existing_offset.top + MOVE_UP_PIXELS});
+                }
+            }
+        }
+
         var res;
         var $form = this._form;
         try {
             res = JSON.parse( xhr.responseText );
         }
         catch (e) {
-            carp('Error parsing JSON error response text.' + e);
+            carp('Error parsing JSON error response text.' , e);
         }
         if (res && res.errors) {
             // Show the bubble with scrollto buttons
@@ -754,12 +843,12 @@ $( function() {
                     var $nfe = $('#non-field-errors');
                     if ($nfe.length == 0) {
                         $nfe = $('<p class="non-field-errors">').insertBefore($form);
-                        $nfe.prepend(
-                              '<input type="text" id="id_non_form_errors" style="position: absolute; left: -500px;" />'+ "\n"
-                            + '<label for="id_non_form_errors" style="display: none;">'
-                            +     gettext('Form errors')
-                            + '</label>'
-                        );
+                        $nfe.prepend( str_concat(
+                              '<input type="text" id="id_non_form_errors" style="position: absolute; left: -500px;" />', "\n"
+                            , '<label for="id_non_form_errors" style="display: none;">'
+                            ,     gettext('Form errors')
+                            , '</label>'
+                        ) );
                     }
                     input = document.getElementById('id_non_form_errors');
 
@@ -768,18 +857,18 @@ $( function() {
                 else {
                     input = document.getElementById(id);
                     show_form_error(input, msgs);
-                    if (!input) carp('Error reported for nonexistant input #'+id);
+                    if (!input) carp('Error reported for nonexistant input #',id);
                 }
 
                 var $p_element = $('<p>');
                 // FIXME (what following 3 lines do?):
                 $p_element.data('rel_input',
                       !input                             ? null
-                    : $('#'+input.id+'_suggest').length  ? $('#'+input.id+'_suggest').get(0) // take suggest input if available
+                    : $( str_concat('#',input.id,'_suggest') ).length  ? $( str_concat('#',input.id,'_suggest') ).get(0) // take suggest input if available
                     :                                      input                             // otherwise the input itself
                 );
                 try {
-                    var $error_label = $('label[for='+input.id+']');
+                    var $error_label = $( str_concat('label[for=',input.id,']') );
                     var parts = [
                         '__FILL_THIS__',
                         ': ' ,
@@ -798,7 +887,7 @@ $( function() {
                 $p_element.click( function(evt) { // focus and scroll to the input
                     if (evt.button != 0) return;
                     var input = $(this).closest('p').data('rel_input');
-                    try { input.focus(); } catch(e) {}
+                    try { focus_errored_element(input); } catch(e) { carp(e); }
                     $(input).addClass('blink')
                     .closest('.collapsed').removeClass('collapsed').addClass('collapse');
                     setTimeout( error_blinking_input, 1500 );
@@ -810,15 +899,15 @@ $( function() {
         }
         else {
             if (!$form) {
-                alert(
-                    gettext('Error sending form.')+' '+
-                    gettext('Moreover, failed to handle the error gracefully.')+"\n"+
-                    gettext('Reloading page')+'...'
-                );
+                alert( str_concat(
+                    gettext('Error sending form.'),' ',
+                    gettext('Moreover, failed to handle the error gracefully.'),"\n",
+                    gettext('Reloading page'),'...'
+                ) );
                 location.reload();
             }
             if ($form.is('.change-form')) {
-                AjaxFormLib.save_preset($form, {title: '* '+gettext('crash save'), msg: gettext('Form content backed up')});
+                AjaxFormLib.save_preset($form, {title: str_concat('* ',gettext('crash save')), msg: gettext('Form content backed up')});
             }
             var id = Kobayashi.closest_loaded( $form.get(0) ).id;
             var address = $form.hasClass('js-dyn-adr')
@@ -848,8 +937,16 @@ $( function() {
     $('.js-form a.js-submit').live('click', function(evt) {
         if (evt.button != 0) return true;    // just interested in left button
         if ($(this).hasClass('js-noautosubmit')) return true;
-        var $form = $(this).closest('.js-form');
-        return ajax_submit($form, this.name, true);
+        // lock the window
+        lock_window();
+        var parent_this = this;
+        setTimeout(
+            function() {
+                var $form = $(parent_this).closest('.js-form');
+                return ajax_submit($form, parent_this.name, true);
+            },
+            200
+        );
     });
 
     // Reset button
@@ -895,7 +992,7 @@ $( function() {
         if ( ! appname ) {
             return;
         }
-        var appname_path = '/' + appname[1] + '/' + appname[2] + '/';
+        var appname_path = str_concat('/' , appname[1] , '/' , appname[2] , '/');
         if (appname_path == '/core/publishable/') {
             NewmanLib.ADR_STACK = [ { from: '/core/publishable/', to: get_hashadr($(this).attr('href')) } ];
         }
@@ -929,7 +1026,7 @@ $( function() {
     var ORIGINAL_TITLE = document.title;
     $(document).bind('content_added', function(evt) {
         var newtitle = $(evt.target).find('#doc-title').text();
-        document.title = (newtitle ? newtitle+' | ' : '') + ORIGINAL_TITLE;
+        document.title = str_concat( (newtitle ? str_concat(newtitle,' | ') : '') , ORIGINAL_TITLE);
     });
 
     // Setting up proper suggesters URLs to take the hash address into account
@@ -954,7 +1051,7 @@ $( function() {
         var option = $form.find('select[name=action] option[selected]').val();
         if (!option) return false;
         var search_terms = $form.find('input[name=q]').val();
-        var url = option + '?q=' + search_terms;
+        var url = str_concat(option , '?q=' , search_terms);
         adr(url);
         return false;
     }
@@ -969,35 +1066,54 @@ $( function() {
     $('#search-form select[name=action]').live('keypress', search_on_enter);
 
     // Search in change lists
-    function changelist_search($input) {
+    function changelist_search($input, $pop) {
         if ($('#changelist').length == 0) return;   // We're not in changelist
+        var is_pop = $pop.length > 0;
         var search_terms = $input.val();
-        if (!search_terms) return;  // Nothing to search for
-        var adr_term = '&q=' + search_terms;
         var loaded = Kobayashi.closest_loaded( $input.get(0) );
+        var adr_term = str_concat('&q=' , search_terms);
+        if (is_pop) {
+            adr_term = str_concat('&pop=', adr_term);
+        }
+
+        // append existing filter arguments to adr_term variable
+        var existing_get = Kobayashi.split_get_arguments(loaded.url);
+        for (var param in existing_get) {
+            if (param == 'q' || param == 'pop') {
+                continue;
+            }
+            adr_term = str_concat(adr_term, '&', param, '=', existing_get[param]);
+        }
+
         if (loaded.id == 'content') {
             adr(adr_term);
         }
         else {
-            Kobayashi.simple_load( loaded.id + '::' + adr_term );
+            Kobayashi.simple_load( str_concat(loaded.id , '::' , adr_term) );
         }
         return false;
     }
     $('#filters-handler .btn.search').live('click', function(evt) {
         if (evt.button != 0) return;
         var $input = $(this).prev('input#searchbar');
-        return changelist_search( $input );
+        var $pop = $(this).siblings('input#id_pop');
+        return changelist_search( $input, $pop );
     });
     $('#filters-handler #searchbar').live('keyup', function(evt) {
-        if (evt.keyCode == CR || evt.keyCode == LF) { } else return;
-        return changelist_search( $(this) );
+        if (evt.keyCode == CR || evt.keyCode == LF) {
+            evt.preventDefault(); // prevent event propagation to changeform's Save button
+        } else {
+            return;
+        }
+        var $pop = $(this).siblings('input#id_pop');
+        return changelist_search( $(this), $pop );
     });
 });
 
 // Message bubble
 function show_message(message, options) {
     if (!options) options = {};
-    var duration = (options.duration == undefined) ? 5000 : options.duration;
+    var duration = (options.duration == undefined) ? DEFAULT_MESSAGE_BUBBLE_DURATION : options.duration;
     var $span = $('<span></span>').html(message);
     var $msg = $('<br />').add($span);
     if (options.msgclass) $span.addClass(options.msgclass);
@@ -1030,7 +1146,7 @@ var $LOADING_MSG, LOADING_CNT = 0;
 function show_loading() {
     LOADING_CNT++;
     if ($LOADING_MSG) return;
-    $LOADING_MSG = show_message(gettext('Loading')+'...', {duration:0});
+    $LOADING_MSG = show_message( str_concat(gettext('Loading'),'...'), {duration:0});
 }
 $(document).bind('show_loading', show_loading);
 function hide_loading() {
@@ -1064,7 +1180,7 @@ function show_ajax_error(xhr) {
         data = JSON.parse(xhr.responseText);
         message = data.message;
     } catch(e) {
-        message = gettext('Request failed')+' ('+xhr.status+': '+gettext(xhr.statusText)+')';
+        message = str_concat( gettext('Request failed'),' (',xhr.status,': ',gettext(xhr.statusText),')' );
         paste_code_into_debug( xhr.responseText.replace(/\n(\s*\n)+/g, "\n"), 'Ajax error response' );
     }
     show_err(message);
@@ -1109,7 +1225,7 @@ PostsaveActionTable.prototype = {
                     popped.onsave(popped,this);
                 if ($.isFunction(popped.onreturn)) {
                     var action_table_obj = this;
-                    $('#'+Kobayashi.DEFAULT_TARGET).one('content_added', function(evt) {
+                    $( str_concat('#', Kobayashi.DEFAULT_TARGET) ).one('content_added', function(evt) {
                         popped.onreturn(popped,action_table_obj);
                     });
                 }
@@ -1142,13 +1258,13 @@ PostsaveActionTable.prototype = {
         if ( /add\/$/.test(get_hashadr('')) ) {
             var oid = this.vars.object_id;
             if (!oid) {
-                var message = gettext('Cannot continue editing') + ' (' + gettext('object ID not received') + ')';
+                var message = str_concat( gettext('Cannot continue editing') , ' (' , gettext('object ID not received') , ')' );
                 show_err(message);
                 carp(message, 'xhr options:', this.vars.options);
                 adr('../');
                 return;
             }
-            adr('../'+oid+'/');
+            adr( str_concat('../',oid,'/') );
         }
         else {
             Kobayashi.reload_content('content');
@@ -1161,7 +1277,7 @@ PostsaveActionTable.prototype = {
             carp('Cannot redirect to newly added object: ID not received.');
         }
         else {
-            adr('../'+oid+'/');
+            adr( str_concat('../',oid,'/') );
         }
     },
     run: function(action) {
@@ -1227,6 +1343,7 @@ function save_change_form_success(text_data) {
         }
 
         show_ok(response_msg);
+        carp('Running Postsave Action Table');
         action_table.run(action);
     } else {
         show_ok(response_msg);
@@ -1235,6 +1352,30 @@ function save_change_form_success(text_data) {
 
     Kobayashi.unload_content('history');
 }
+
+function changelist_shown_handler(evt) {
+    /** called when changelist is shown (rendered) */
+    function th_click(evt) {
+        if ( !$(evt.target).is('th') ) {
+            return;
+        }
+        var pass_event = jQuery.Event('click');
+        pass_event.button = 0;
+        evt.data.anchor.trigger(pass_event);
+        evt.preventDefault();
+        return false;
+    }
+
+    var $anchors = $('div#changelist table tr').filter('.row1,.row2').find('th a:last');
+    $anchors.each(
+        function(counter, anchor) {
+            var $th = $(anchor).closest('th');
+            $th.css('cursor', 'pointer');
+            $th.one('click', {anchor: $(anchor)}, th_click);
+        }
+    );
+}
+//$(document).bind('changelist_shown', changelist_shown_handler); //FIXME buggy in Positions changelist.
 
 function changelist_batch_success(response_text) {
     var $dialog = $('<div id="confirmation-wrapper">');
@@ -1292,7 +1433,7 @@ $('.help-enhanced input').live('mouseover', function() {
         top: $(this).offset().top,
         left: $(this).offset().left + $(this).outerWidth(),
         minHeight: $(this).outerHeight()
-    }).html('<img alt="?" src="'+MEDIA_URL+'ico/16/help.png" />').data('antecedant_input', $(this));
+    }).html( str_concat('<img alt="?" src="',MEDIA_URL,'ico/16/help.png" />') ).data('antecedant_input', $(this));
     $help_button.appendTo($(this).closest('.help-enhanced'));
     $(this).data('help_button', $help_button);
 }).live('mouseout', function() {
@@ -1341,57 +1482,82 @@ $(document).ready( function() {
             carp('Failed to re-initialize thickbox:', e);
         }
     });
+
 });
 
 // Opens an overlay with a changelist and calls supplied function on click on item.
 $( function() {
+    function OverlayOpener(content_type, selection_callback) {
+        var arg_content_type = content_type;
+        var arg_selection_callback = selection_callback;
+
+        // 1st step
+        function init_overlay_html() {
+            get_html_chunk('overlay', init_overlay_html_chunk_callback);
+        }
+
+        // 2nd step
+        function init_overlay_html_chunk_callback(data) {
+            overlay_html = data;
+            continue_opening_overlay(arg_content_type, arg_selection_callback);
+        }
+
+        // 3rd (final) step
+        function continue_opening_overlay(content_type, selection_callback) {
+            var ooargs = arguments;
+            if ( ! overlay_html ) {
+                get_html_chunk('overlay', function(data) {
+                    overlay_html = data;
+                    ooargs.callee.apply(this, ooargs);
+                });
+                return;
+            }
+
+            var top_zindex = ( function() {
+                var rv = 1;
+                $('.ui-widget-overlay').each( function() {
+                    rv = Math.max(rv, $(this).css('zIndex'));
+                });
+                return rv + 1;
+            })();
+            var $overlay = $('#changelist-overlay');
+            if ($overlay.length == 0) {
+                $overlay = $( overlay_html )
+                .css({top:0,left:0})
+                .appendTo(
+                       $('.change-form').get(0)
+                    || $('#content').get(0)
+                    || $('body').get(0)
+                );
+                $('#overlay-content').bind('content_added', init_overlay_content);
+            }
+            $overlay.css({zIndex:top_zindex});
+
+            $('#overlay-content').data('selection_callback', selection_callback);
+
+            var ct_arr = /(\w+)\W(\w+)/.exec( content_type );
+            if ( ! ct_arr ) {
+                carp('open_overlay: Unexpected content type: '+content_type);
+                return false;
+            }
+            var address = str_concat('/' , ct_arr[1] , '/' , ct_arr[2] , '/?pop');
+
+            Kobayashi.load_content({
+                address: address,
+                target_id: 'overlay-content',
+                selection_callback: selection_callback
+            });
+        }
+        
+        // init
+        init_overlay_html();
+
+        return this;
+    }
+
     var overlay_html;
-
-    open_overlay = function(content_type, selection_callback) {
-        var ooargs = arguments;
-        if ( ! overlay_html ) {
-            get_html_chunk('overlay', function(data) {
-                overlay_html = data;
-                ooargs.callee.apply(this, ooargs);
-            });
-            return;
-        }
-
-        var top_zindex = ( function() {
-            var rv = 1;
-            $('.ui-widget-overlay').each( function() {
-                rv = Math.max(rv, $(this).css('zIndex'));
-            });
-            return rv + 1;
-        })();
-        var $overlay = $('#changelist-overlay');
-        if ($overlay.length == 0) {
-            $overlay = $( overlay_html )
-            .css({top:0,left:0})
-            .appendTo(
-                   $('.change-form').get(0)
-                || $('#content').get(0)
-                || $('body').get(0)
-            );
-            $('#overlay-content').bind('content_added', init_overlay_content);
-        }
-        $overlay.css({zIndex:top_zindex});
-
-        $('#overlay-content').data('selection_callback', selection_callback);
-
-        var ct_arr = /(\w+)\W(\w+)/.exec( content_type );
-        if ( ! ct_arr ) {
-            carp('open_overlay: Unexpected content type: '+content_type);
-            return false;
-        }
-        var address = '/' + ct_arr[1] + '/' + ct_arr[2] + '/?pop';
-
-        Kobayashi.load_content({
-            address: address,
-            target_id: 'overlay-content',
-            selection_callback: selection_callback
-        });
-    };
+    
+    open_overlay = OverlayOpener;
     $('.overlay-closebutton').live('click', function() {
         $(this).closest('.overlay').css({zIndex:5}).hide()
         .find('.overlay-content').removeData('selection_callback');
@@ -1400,7 +1566,7 @@ $( function() {
     function init_overlay_content(evt, extras) {
         var $target = $(evt.target);
 
-        var target_selector = $target.attr('id') ? '#'+$target.attr('id')+' ' : '';
+        var target_selector = $target.attr('id') ? str_concat('#',$target.attr('id'),' ') : '';
 
         // selection
         var $target_links = $target.find('#changelist tbody a');
@@ -1434,21 +1600,34 @@ $( function() {
             modify_getpar_href(this);
         });
 
+        // search button
+        $target.find('#filters-handler .btn.icn.search').attr('href', 'filters::overlay-content::filters/');
+
         // filters
         var $filt = $('#filters-handler .popup-filter');
         if ($filt.length) {
-            $filt.addClass('js-simpleload').attr( 'href', $filt.attr('href').replace(/::::/, '::'+$target.attr('id')+'::') );
+            $filt.addClass('js-simpleload').attr( 'href', $filt.attr('href').replace(/::::/, str_concat('::',$target.attr('id'),'::') ) );
             function init_filters() {
                 $(this).find('.filter li a').each( function() {
-                    $(this).attr('href', $(this).attr('href').replace(/^\?/, 'overlay-content::&')).addClass('js-simpleload');
+                    var $this = $(this);
+                    $this.attr('href', $this.attr('href').replace(/^\?/, 'overlay-content::&')).addClass('js-simpleload');
+                    var href = $this.attr('href');
+                    var params = href.split(/&/);
+                    // params[1] is part after token 'overlay-content::'
+                    if (params.length == 2 && params[1].indexOf('pop') >= 0) {
+                        // there is no other GET parameter, addition of string '&q=' is needed
+                        $this.attr('href', href + '&q=');
+                    }
                 });
             }
+            log_generic.log('HREF: ', $filt.attr('href'));
             $('#filters').unbind('content_added', init_filters).one('content_added', init_filters);
         }
+        log_generic.log('init_overlay_content');
 
         var $cancel = $('#filters-handler a.js-clear').not('.overlay-adapted');
         if ($cancel.length) $cancel
-        .attr( 'href', $target.attr('id')+'::'+$cancel.attr('href') )
+        .attr( 'href', str_concat($target.attr('id'),'::',$cancel.attr('href')) )
         .removeClass('js-clear')
         .addClass('js-simpleload overlay-adapted');
 
@@ -1523,7 +1702,7 @@ function DATEPICKER_OPTIONS(opts) {
 // Timeline (ella.exports application)
 
 function timeline_init() {
-    $(document).bind('media_loaded', Timeline.timeline_register);
+    $(document).one('media_loaded', Timeline.timeline_register);
 }
 
 Timeline = new Object();
@@ -1703,6 +1882,15 @@ Timeline = new Object();
         $('.suggest-bubble,.suggest-list,.suggest-fields-bubble').css('z-index', '0');
     }
 
+    function remove_beginning_char(address, character) {
+        var ch = '/';
+        if (character) ch = character;
+        if (address.charAt(0) == ch) {
+            return address.substring(1);
+        }
+        return address;
+    }
+
     // register timeline events, etc. (entry point)
 
     function timeline_register() {
@@ -1720,6 +1908,22 @@ Timeline = new Object();
         //$('.timeline-ul').disableSelection();
         //$('.timeline-item').click(item_clicked);
         $('.timeline-item').hover(item_mouse_over, item_mouse_out);
+
+        $('.timeline-item-navigation a.edit').live('mousedown', function(evt) {
+            if (evt.button != 0) return;
+            var from_url = str_concat(document.location.pathname , document.location.hash);
+            var to_url = $(this).attr('href');
+            // remove /#  from to_url
+            to_url = remove_beginning_char(to_url);
+            to_url = remove_beginning_char(to_url, '#'); 
+            from_url = remove_beginning_char(from_url);
+
+            NewmanLib.ADR_STACK = [
+                { from: from_url, to: to_url }
+            ];
+        });
+
+        /*
         $('.timeline-item-navigation .insert').live(
             'click',
             show_insert_dialog
@@ -1734,94 +1938,156 @@ Timeline = new Object();
             'click',
             hide_dialog
         );
+        */
     }
     Timeline.timeline_register = timeline_register;
 
 })(); // end of Timeline
 
+// Main category filter widget
+var __MainCategoryFilter = function() {
+    // depends on Kobayashi object, jQuery
+    //me.super_class = OtherClass;
 
-// Prefilled values into the change-forms
-// Prefilling forms handles text input elements and select boxes
-// (including creating special hidden field used to redirect browser after change-form is saved)
+    function init(target_id, display_element_selector) {
+        this.target_id = target_id;
+        this.display_element_selector  = display_element_selector;
+        this.CATEGORY_FILTER_URL = '/nm/filter-by-main-categories/';
+        this.ASYNC_REGISTER_DELAY = 500;
+        this.displayed = false;
+    }
+    this.init = init;
 
-function prefill_change_form() {
-    $(document).bind('media_loaded', PrefilledChangeForm.fill_form);
-}
-
-PrefilledChangeForm = new Object();
-(function() {
-    function get_prefilled_values(splitted) {
-        // URLDecode jQuery method should be installed via change_form.html template (request_media).
-        var data = $.URLDecode(splitted[1]);
-        var idata = data.split('&');
-        var params = new Object();
-        for (var i in idata) {
-            var element = idata[i];
-            var x = element.split('=');
-            params[x[0]] = x[1];
+    function register_post_save() {
+        $frm = $(this.display_element_selector);
+        if ($frm.length == 0) {
+            // if newman homepage element is not found abort loading main category filter.
+            return;
         }
-        return params;
+        var me = this;
+        function wrap() {
+            me.display();
+        }
+        $frm.find('input[type=hidden][name=success]').data('callback', wrap);
     }
-    PrefilledChangeForm.get_prefilled_values = get_prefilled_values;
+    this.register_post_save = register_post_save;
 
-    function get_parameters(address) {
-        if (!address) return null; // URL doesn't contain hash char
-        var splitted = address.split('?');
-        if (splitted.length != 2) return null;  // no GET parameters found
-        return splitted;
+    function display() {
+        if ($(this.display_element_selector).length == 0) {
+            // if newman homepage element is not found abort loading main category filter.
+            return;
+        }
+        var args = {
+            address: this.CATEGORY_FILTER_URL,
+            target_id: this.target_id
+        };
+        Kobayashi.load_content(args);
+        var me = this;
+        function reg_wrap() {
+            me.register_post_save(); // should by called asynchronously due to dom is not ready yet.
+        }
+        $(document).one('content_added', reg_wrap);
+        this.displayed = true;
     }
-    PrefilledChangeForm.get_parameters = get_parameters;
+    this.display = display;
 
-    function fill_form_located_by_selector(selector, params) {
-        var i, element, options, paramValue;
-        //for (i = 0; i < input_elements.length; i++)
-        $(selector).each(function() {
-            //element = input_elements[i];
-            element = $(this)[0];
-            if (element.id in params) {
-                paramValue = params[element.id];
-                if (element.tagName == 'SELECT') {
-                    options = $('#' + element.id + ' option');
-                    for ( i = 0; i < options.length; i++ ) {
-                        if (options[i].value == paramValue) {
-                            element.value = i;
-                        }
-                    }
-                } else {
-                    element.setAttribute('value', params[element.id]);
-                }
+    return this;
+};
+var __MainCategoryFilter4ChangeList = function() {
+    // depends on MainCategoryFilter object, Kobayashi object.
+    this.super_class = MainCategoryFilter;
+
+    function init(target_id, display_element_selector, reload_element_id) {
+        MainCategoryFilter.call(this, target_id, display_element_selector);
+        this.reload_element_id = reload_element_id;
+    }
+    this.init = init;
+
+    function register_post_save() {
+        $frm = $(this.display_element_selector);
+        if ($frm.length == 0) {
+            // if newman homepage element is not found abort loading main category filter.
+            return;
+        }
+        var me = this;
+        function wrap() {
+            Kobayashi.reload_content(me.reload_element_id);
+        }
+        $frm.find('input[type=hidden][name=success]').data('callback', wrap);
+    }
+    this.register_post_save = register_post_save;
+
+    function toggle_display() {
+        var $elem = $(this.display_element_selector);
+        if ( $elem.is(':visible') && this.displayed ) {
+            $elem.hide();
+        } else {
+            if (!this.displayed) {
+                this.display();
+                return;
             }
-        });
-        // pass redirect_To addres used after change-form is saved
-        if ('http_redirect_to' in params) {
-            var parts = [
-                '<input type="hidden" name="http_redirect_to" value="',
-                params['http_redirect_to'],
-                '" />'
-            ];
-            $('.change-form input:hidden:first').after(parts.join(''));
+            $elem.show();
         }
     }
-    PrefilledChangeForm.fill_form_located_by_selector = fill_form_located_by_selector;
+    this.toggle = toggle_display;
 
-    function fill_form(base_selector, address) {
-        var param_base_selector = base_selector;
-        var param_address = address;
-        if (!param_base_selector) {
-            param_base_selector = '.change-form';
-        }
-        if (!param_address) {
-            param_address = window.location.hash;
-        }
-        if (!$(param_base_selector)) return;    // procedure works only with change-forms
-        var splitted = PrefilledChangeForm.get_parameters(param_address);
-        if (!splitted) return;
-        // params contains elements ids
-        var params = get_prefilled_values(splitted);
-        PrefilledChangeForm.fill_form_located_by_selector(param_base_selector + ' input,select', params);
+    return this;
+};
+var MainCategoryFilter = to_class(__MainCategoryFilter);
+var MainCategoryFilter4ChangeList = to_class(__MainCategoryFilter4ChangeList);
+
+// filter placed on homepage
+var hp_main_category_filter = new MainCategoryFilter(
+    'id-hpbox-setup-main-category-filters',
+    '#id-hpbox-setup-main-category-filters'
+);
+// filter placed in changelists (not popup changelists)
+var changelist_main_category_filter = null;
+(function() {
+    function display_main_category_filter_in_homepage() {
+        // jquery changes context for display method to selector's target, so
+        // calling .display() must be wrapped in another function.
+        hp_main_category_filter.display(); 
     }
-    PrefilledChangeForm.fill_form = fill_form;
 
-})(); // end of PrefilledChangeForm
+    function display_main_category_filter_in_changelist() {
+        changelist_main_category_filter.toggle();
+        // apply css to shown div
+        var $div = $('div#id-main-category-filter');
+        $div.css('position', 'absolute');
+    }
+
+    function register_main_category_button() {
+        var $button = $('div#id-main-category-filter').siblings().find('.btn.combo');
+        if ($button.length != 1) {
+            return;
+        }
+        changelist_main_category_filter = new MainCategoryFilter4ChangeList(
+            'id-main-category-filter',
+            '#id-main-category-filter',
+            'content'
+        );
+        $button.unbind('click', display_main_category_filter_in_changelist);
+        $button.bind('click', display_main_category_filter_in_changelist);
+    }
+    function filters_content_added() {
+        register_main_category_button();
+    }
+
+    function register_filters_show_click() {
+        $('.icn.btn.filter').live( 'click', 
+            function() {
+                var $filters = $('div#filters');
+                $filters.unbind('content_added', filters_content_added);
+                $filters.one('content_added', filters_content_added);
+            }
+        );
+    }
+
+    $(document).bind( 'media_loaded', display_main_category_filter_in_homepage );
+    $(document).bind( 'changelist_shown', register_filters_show_click );
+})(jQuery);
+// end of Main category filter widget
+
 
 // EOF

@@ -1,5 +1,5 @@
 from django.core.files.images import get_image_dimensions
-import Image
+from PIL import Image
 from datetime import datetime
 from os import path
 import os
@@ -65,6 +65,7 @@ class PhotoBox(Box):
                 'show_description' : self.params.get('show_description', ''),
                 'show_authors' : self.params.get('show_authors', ''),
                 'show_detail' : self.params.get('show_detail', ''),
+                'show_source' : self.params.get('show_source', ''),###
                 'link_url': self.params.get('link_url', ''),
             })
         return cont
@@ -166,7 +167,8 @@ class Photo(models.Model):
         # rename image by slug
         imageType = detect_img_type(self.image.path)
         if imageType is not None:
-            self.image = file_rename(self.image.name.encode('utf-8'), self.slug, PHOTOS_TYPE_EXTENSION[ imageType ])
+            # Cut slug - image field size is 200, but full path can be bigger then 200 (UPLOAD_TO + slug + extension)
+            self.image = file_rename(self.image.name.encode('utf-8'), self.slug[:64], PHOTOS_TYPE_EXTENSION[ imageType ])
         # delete formatedphotos if new image was uploaded
         if image_changed:
             super(Photo, self).save(force_insert=force_insert, force_update=force_update, **kwargs)

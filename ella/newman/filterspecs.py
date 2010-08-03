@@ -5,15 +5,15 @@ import logging
 
 from django.utils.translation import ugettext as _
 from django.contrib.admin import filterspecs
+from django.contrib.sites.models import Site
+import django.db
 
 from ella.core.models import Category
 from ella.newman.permission import permission_filtered_model_qs
 
 log = logging.getLogger('ella.newman')
 
-
-class CustomFilterSpec(filterspecs.FilterSpec):
-    """ custom defined FilterSpec """
+class CommonFilter(filterspecs.FilterSpec):
     def __init__(self, f, request, params, model, model_admin):
         self.state = 0
         self.params = params
@@ -27,21 +27,14 @@ class CustomFilterSpec(filterspecs.FilterSpec):
         self.request_get = request.GET
         if self.f:
             # funny conditional parent constructor call
-            super(CustomFilterSpec, self).__init__(f, request, params, model, model_admin)
+            super(CommonFilter, self).__init__(f, request, params, model, model_admin)
         self.request_path_info = request.path_info
         self.title_text = ''
         if self.f:
             self.title_text = self.f.verbose_name
         self.active_filter_lookup = None
-        self.all_choices = []
         self.selected_item = None
         self.remove_from_querystring = []  # may be used as list of keys to be removed from querystring when outputting links
-
-    def filter_func(self):
-        raise NotImplementedError('filter_func() method should be overloaded (substituted at run-time).')
-
-    def title(self):
-        return self.title_text
 
     def get_lookup_kwarg(self):
         """
@@ -74,17 +67,6 @@ class CustomFilterSpec(filterspecs.FilterSpec):
                     break
         return self.active_filter_lookup
 
-    def filter_active(self):
-        " Can be used from template. "
-        return self.is_active(self.request_get)
-
-    def is_active(self, request_params):
-        """
-        Returns True if filter is applied, otherwise returns False.
-        Tries to find its argument(s) in request querystring.
-        """
-        return len(self.get_active(request_params)) > 0
-
     def is_selected_item(self):
         """
         Returns empty dict if no filter item is selected.
@@ -97,6 +79,93 @@ class CustomFilterSpec(filterspecs.FilterSpec):
             if par in self.request_get:
                 out[par] = self.request_get[par]
         return out
+
+    def generate_choice(self, **lookup_kwargs):
+        """ 
+        Returns representation of one choice. 
+        Suitable when rendering of all choices isn't necessary. Faster than get_selected() method.
+        """
+        model = self.model
+        lookup = dict()
+        if 'field' in self.__dict__:
+            if self.field and type(self.field) == django.db.models.fields.related.ForeignKey:
+                model = self.field.rel.to
+                for key in lookup_kwargs:
+                    index  = key.find('__')
+                    if index != key.rfind('__'): #multiple __ present
+                        modified_key = key[index + 2:]
+                        lookup[modified_key] = lookup_kwargs[key]
+                    else:
+                        lookup[key] = lookup_kwargs[key]
+
+        if len(lookup.keys()) == 0:
+            return None
+        try:
+            thing = model.objects.get(**lookup)
+        except (self.model.MultipleObjectsReturned, self.model.DoesNotExist):
+            return None
+        return thing.__unicode__()
+
+    def get_selected(self):
+        " Should be used within a template to get selected item in filter. "
+        if hasattr(self, 'selected_item'):
+            return self.selected_item
+        if not hasattr(self, 'all_choices'):
+            # return the same structure with error key set
+            return {
+                'selected': False,
+                'query_string':'',
+                'display': '',
+                'error': 'TOO EARLY'
+            }
+        for item in self.all_choices:
+            if item['selected']:
+                self.selected_item = item
+                return item
+
+
+
+class CustomFilterSpec(CommonFilter):
+    """ custom defined FilterSpec """
+    def __init__(self, f, request, params, model, model_admin):
+        self.state = 0
+        self.params = params
+        self.model = model
+        self.links = []
+        self.model_admin = model_admin
+        self.user = request.user
+        #self.lookup_val = request.GET.get(self.lookup_kwarg, None) #selected filter value (not label)
+        self.lookup_kwarg = 'NOT SET'
+        self.f = f
+        self.request_get = request.GET
+        if self.f:
+            # funny conditional parent constructor call
+            super(CustomFilterSpec, self).__init__(f, request, params, model, model_admin)
+        self.request_path_info = request.path_info
+        self.title_text = ''
+        if self.f:
+            self.title_text = self.f.verbose_name
+        self.active_filter_lookup = None
+        self.all_choices = []
+        self.selected_item = None
+        self.remove_from_querystring = []  # may be used as list of keys to be removed from querystring when outputting links
+
+    def filter_func(self):
+        raise NotImplementedError('filter_func() method should be overloaded (substituted at run-time).')
+
+    def title(self):
+        return self.title_text
+
+    def filter_active(self):
+        " Can be used from template. "
+        return self.is_active(self.request_get)
+
+    def is_active(self, request_params):
+        """
+        Returns True if filter is applied, otherwise returns False.
+        Tries to find its argument(s) in request querystring.
+        """
+        return len(self.get_active(request_params)) > 0
 
     def get_disabled_params(self):
         " Returns parameter dict for constructing HREF to disable this filter. "
@@ -122,8 +191,11 @@ class CustomFilterSpec(filterspecs.FilterSpec):
         lookup = self.get_lookup_kwarg()
         selected = self.is_selected_item()
         # Reset filter button/a href
+        all_query_string = cl.get_query_string(None, self.get_active(self.request_get))
+        if all_query_string.endswith('?') and len(all_query_string) == 1:
+            all_query_string = '?q='
         yield {'selected': len(selected.keys()) == 0,
-               'query_string': cl.get_query_string(None, self.get_active(self.request_get) ),
+               'query_string': all_query_string,
                'display': _('All')}
         for title, param_dict in self.links:
             params = make_unicode_params(param_dict)
@@ -213,32 +285,24 @@ class NewmanSiteFilter(CustomFilterSpec):
             fspec.links.append(link)
         return True
 
+    def generate_choice(self, **lookup_kwargs):
+        category_id = lookup_kwargs.get(self.site_field_path, '')
+        if not category_id or not category_id.isdigit():
+            return None
+        try:
+            thing = Site.objects.get( pk=int(category_id) )
+        except (Site.MultipleObjectsReturned, Site.DoesNotExist):
+            return None
+        return thing.__unicode__()
+
 # -------------------------------------
 # Standard django.admin filters
 # -------------------------------------
-# TODO make common parent of FilterSpecEnhancement and CustomFilterSpec
 
-class FilterSpecEnhancement(filterspecs.FilterSpec):
+class FilterSpecEnhancement(CommonFilter):
     def filter_active(self):
         " Can be used from template. "
         return self.is_active(self.params)
-
-    def get_selected(self):
-        " Should be used within a template to get selected item in filter. "
-        if hasattr(self, 'selected_item'):
-            return self.selected_item
-        if not hasattr(self, 'all_choices'):
-            # return the same structure with error key set
-            return {
-                'selected': False,
-                'query_string':'',
-                'display': '',
-                'error': 'TOO EARLY'
-            }
-        for item in self.all_choices:
-            if item['selected']:
-                self.selected_item = item
-                return item
 
 class RelatedFilterSpec(filterspecs.RelatedFilterSpec, FilterSpecEnhancement):
     def is_active(self, request_params):
@@ -250,7 +314,7 @@ class RelatedFilterSpec(filterspecs.RelatedFilterSpec, FilterSpecEnhancement):
 
     def choices(self, cl):
         if not hasattr(self, 'all_choices'):
-            c = super(self.__class__, self).choices(cl)
+            c = super(RelatedFilterSpec, self).choices(cl)
             self.all_choices = map(None, c)
         return self.all_choices
 
@@ -263,8 +327,57 @@ class ChoicesFilterSpec(filterspecs.ChoicesFilterSpec, FilterSpecEnhancement):
 filterspecs.FilterSpec.register_insert(lambda f: bool(f.choices), ChoicesFilterSpec)
 
 class DateFieldFilterSpec(filterspecs.DateFieldFilterSpec, FilterSpecEnhancement):
+    def __init__(self, *args, **kwargs):
+        super(DateFieldFilterSpec, self).__init__(*args, **kwargs)
+        self.active_choice = None
+
+    def get_lookup_kwarg(self):
+        out = []
+        for title, param_dict in self.links:
+            for key in param_dict:
+                out.append(key)
+        return out
+
     def is_active(self, request_params):
-        return False
+        if self.__get_active_choice() is None:
+            return False
+        return True
+
+    def get_active(self, request_params):
+        if self.active_filter_lookup is not None: # cached result
+            return self.active_filter_lookup
+        self.active_filter_lookup = []
+        lookup_multi = 0
+        lookup = self.get_lookup_kwarg()
+        if type(lookup) == list:
+            lookup_multi = len(lookup)
+            found = 0
+        for p in request_params:
+            if not lookup_multi and p == lookup:
+                self.active_filter_lookup = [lookup]
+                break
+            elif lookup_multi:
+                if p in lookup:
+                    found += 1
+                    self.active_filter_lookup.append(p)
+        return self.active_filter_lookup
+
+    def __get_active_choice(self):
+        if self.active_choice is not None:
+            return self.active_choice
+        for title, param_dict in self.links:
+            if param_dict and self.date_params == param_dict:
+                self.active_choice = (title, param_dict)
+                return self.active_choice
+
+    def generate_choice(self, **lookup_kwargs):
+        active_title, active_param_dict = self.active_choice
+        if lookup_kwargs == active_param_dict:
+            return active_title
+        for title, param_dict in self.links:
+            if lookup_kwargs == param_dict:
+                return self.active_choice
+        return None
 
 filterspecs.FilterSpec.register_insert(lambda f: isinstance(f, models.DateField), DateFieldFilterSpec)
 

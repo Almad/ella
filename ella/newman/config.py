@@ -32,15 +32,18 @@ STATUS_JSON_REDIRECT = 'redirect'
 HTTP_OK = 200
 HTTP_ERROR = 405
 
+# Newman base URL (suitable when newman_frontend_tags' tags is used)
+BASE_URL = getattr(settings, 'NEWMAN_BASE_URL', '')
+
 # Maximum autosave objects hold for bound object:
 AUTOSAVE_MAX_AMOUNT = getattr(settings, 'NEWMAN_AUTOSAVE_MAX_AMOUNT', 3)
 
 # List of applicable ContentTypes
-NON_PUBLISHABLE_CTS = (
+NON_PUBLISHABLE_CTS = getattr(settings, 'NEWMAN_NON_PUBLISHABLE_CTS', (
     'photos.photo',
     'polls.poll',
     'polls.survey',
-)
+))
 
 # Models that have TaggingInlineAdmin in inlines
 TAGGED_MODELS = getattr(settings, 'NEWMAN_TAGGED_MODELS', (
@@ -52,16 +55,26 @@ TAGGED_MODELS = getattr(settings, 'NEWMAN_TAGGED_MODELS', (
     'polls.contest',
 ))
 
+# Exportable publishables
+EXPORTABLE_MODELS = getattr(settings, 'NEWMAN_EXPORTABLE_MODELS', (
+    'core.publishable',
+    'articles.article',
+    'galleries.gallery',
+    'interviews.interview',
+    'polls.quiz',
+    'polls.contest',
+))
+
 NEWMAN_FAVORITE_ITEMS = getattr(settings, 'NEWMAN_FAVORITE_ITEMS', (
-    'publishable',
-    'article',
-    'photo',
-    'gallery',
-    'survey',
-    'quiz',
-    'contest',
-    'interview',
-    'position',
+    'core.publishable',
+    'articles.article',
+    'photos.photo',
+    'galleries.gallery',
+    'polls.survey',
+    'polls.quiz',
+    'polls.contest',
+    'interviews.interview',
+    'positions.position',
 ))
 
 # TODO try to load consts from django.conf.settings

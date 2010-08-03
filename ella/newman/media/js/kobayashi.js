@@ -1,4 +1,30 @@
-KOBAYASHI_VERSION = '2009-10-05';
+/** 
+ * Kobayashi AJAX powered content injection framework.
+ * requires: jQuery 1.4.2+, 
+ *          gettext() function,
+ *          try_decorator() (utils.js),
+ *          timer(), timerEnd() functions (utils.js),
+ *          to_class() function (inheritance.js),
+ *          LoggingLib object.
+ *
+ * provides:
+ *          arr2map() conversion from array to "hashmap",
+ *          adr(),
+ *          get_adr(),
+ *          get_hash(),
+ *          get_hashadr(),
+ *          Kobayashi object.
+ *
+ */
+KOBAYASHI_VERSION = '2010-07-27';
+
+// Kobayashi logging
+log_kobayashi = new LoggingLib('KOBAYASHI:', false);
+
+var CURRENT_HASH = '';
+var KOBAYASHI_ADDRESSBAR_CHECK_INTERVAL = 250; // msec
+var KOBAYASHI_CSS_LOAD_TRIES = 3;
+var KOBAYASHI_CSS_LOAD_TIMEOUT = 250; // msec
 
 // Debugging tools
 ;;; function alert_dump(obj, name) {
@@ -6,18 +32,6 @@ KOBAYASHI_VERSION = '2009-10-05';
 ;;;     for (var i in obj) s += i + ': ' + obj[i] + "\n";
 ;;;     alert(s);
 ;;; }
-function carp() {
-    try {
-        $('#debug').append($('<p>').text($.makeArray(arguments).join(' ')));
-    } catch(e) { }
-    try {
-        console.log.apply(this, arguments);
-    } catch(e) {
-        try {
-            console.log(arguments);
-        } catch(e) { }
-    }
-}
 
 function arr2map(arr) {
     var rv = {};
@@ -150,9 +164,9 @@ Kobayashi.LOADED_MEDIA = {};
             }
             if ($.isFunction( extras.success_callback )) try {
                 extras.success_callback.call(extras);
-            } catch(e) { carp('Failed success callback (load_content)', e, extras) };
+            } catch(e) { log_kobayashi.log('Failed success callback (load_content)', e, extras) };
             $target.trigger('content_added', extras);
-            carp('content_added triggered.');
+            log_kobayashi.log('content_added triggered on element ', $target[0]);
         }
         $(document).trigger('dec_loading');
         PAGE_CHANGED++;
@@ -162,7 +176,7 @@ Kobayashi.LOADED_MEDIA = {};
     // argument is a LOAD_BUF item
     function inject_error_message(info) {
         if (!info) {
-            carp('inject_error_message expect an object with target_id, xhr and address. Received:', info);
+            log_kobayashi.log('inject_error_message expect an object with target_id, xhr and address. Received:', info);
             return;
         }
         var $target = $('#'+info.target_id);
@@ -220,7 +234,7 @@ Kobayashi.LOADED_MEDIA = {};
         if (is_priority) {
             if (LOAD_BUF[MIN_LOAD] == undefined) return MIN_LOAD;
             if (MIN_LOAD <= 0) {
-                carp(new Error('Cannot make a priority request when request queue is not empty before first request has been finished.'));
+                log_kobayashi.log(new Error('Cannot make a priority request when request queue is not empty before first request has been finished.'));
                 return ++MAX_LOAD;
             }
             return --MIN_LOAD;
@@ -242,7 +256,7 @@ Kobayashi.LOADED_MEDIA = {};
         
         // If the queue is empty, clean it
         if (!LOAD_BUF[ MIN_LOAD ]) {
-//            ;;; carp("Emptying buffer");
+//            ;;; log_kobayashi.log("Emptying buffer");
             LOAD_BUF = [];
             MIN_LOAD = undefined;
             MAX_LOAD = -1;
@@ -256,10 +270,10 @@ Kobayashi.LOADED_MEDIA = {};
         while (LOAD_BUF.length > MIN_LOAD+1 && !LOAD_BUF[ ++MIN_LOAD ]) {}
         var $target = $('#'+info.target_id);
         if ($target && $target.jquery && $target.length) {} else {
-            carp('Could not find target element: #'+info.target_id);
+            log_kobayashi.log('Could not find target element: #',info.target_id);
             if ($.isFunction(info.error_callback)) try {
                 info.error_callback.call(info);
-            } catch(e) { carp('Failed error callback (load_content)', e, info); }
+            } catch(e) { log_kobayashi.log('Failed error callback (load_content)', e, info); }
             $(document).trigger('dec_loading');
             draw_ready();
             return;
@@ -278,7 +292,7 @@ Kobayashi.LOADED_MEDIA = {};
         $('#'+info.target_id).removeClass('loading');
         $(document).trigger('dec_loading');
         
-        carp('Failed to load '+info.address+' into '+info.target_id);
+        log_kobayashi.log('Failed to load ',info.address,' into ',info.target_id);
     }
     
     // Take a container and a URL. Give the container the "loading" class,
@@ -288,10 +302,10 @@ Kobayashi.LOADED_MEDIA = {};
         var target_id = arg.target_id;
         var address = arg.address;
         if (target_id == undefined) {
-            carp('ERROR: Kobayashi.load_content must get target_id field in its argument.');
+            log_kobayashi.log('ERROR: Kobayashi.load_content must get target_id field in its argument.');
             return;
         }
-        ;;; carp('loading '+address+' into #'+target_id);
+        ;;; log_kobayashi.log('loading ',address,' into #',target_id);
         
         delete arg.xhr; // just in case there was one
             
@@ -353,7 +367,7 @@ Kobayashi.LOADED_MEDIA = {};
                 draw_ready();
                 if ($.isFunction(this.error_callback)) try {
                     this.error_callback();
-                } catch(e) { carp('Failed error callback (load_content)', e, this); }
+                } catch(e) { log_kobayashi.log('Failed error callback (load_content)', e, this); }
             },
             load_id: load_id,
             request_no: MAX_REQUEST,
@@ -393,7 +407,7 @@ Kobayashi.LOADED_MEDIA = {};
     // and nothing else is done for this specifier.
     function load_by_hash() {
         var hash = location.hash.substr(1);
-//        ;;; carp('load #'+MAX_REQUEST+'; hash: '+hash)
+//        ;;; log_kobayashi.log('load #'+MAX_REQUEST+'; hash: '+hash)
         
         // Figure out what should be reloaded and what not by comparing the requested things with the loaded ones.
         var requested = {};
@@ -457,7 +471,7 @@ Kobayashi.LOADED_MEDIA = {};
                 }
             }
             if (!indep) {
-                carp(ids_map);
+                log_kobayashi.log(ids_map);
                 throw('Cyclic graph of elements???');
             }
             
@@ -528,7 +542,7 @@ Kobayashi.LOADED_MEDIA = {};
                 URLS[address](target_id);
                 continue;
             }
-            
+           
             load_content({
                 target_id: target_id,
                 address: address,
@@ -540,21 +554,23 @@ Kobayashi.LOADED_MEDIA = {};
     // Fire hashchange event when location.hash changes
     window.CURRENT_HASH = '';
     $(document).bind('hashchange', function() {
-//        carp('hash: ' + location.hash);
+//        log_kobayashi.log('hash: ' + location.hash);
         MAX_REQUEST++;
         $('.loading').removeClass('loading');
         $(document).trigger('hide_loading');
         load_by_hash();
     });
-    setTimeout( function() {
-        try {
-            if (location.hash != CURRENT_HASH) {
-                CURRENT_HASH = location.hash;
+
+    function watch_location() {
+        if (location.hash != CURRENT_HASH) {
+            CURRENT_HASH = location.hash;
+            try {
                 $(document).trigger('hashchange');
-            }
-        } catch(e) { carp(e); }
-        setTimeout(arguments.callee, 50);
-    }, 50);
+            } catch(e) { log_kobayashi.log(e); }
+        }
+        setTimeout(arguments.callee, KOBAYASHI_ADDRESSBAR_CHECK_INTERVAL);
+    }
+    setTimeout(watch_location, KOBAYASHI_ADDRESSBAR_CHECK_INTERVAL);
     // End of hash-driven content management
     
     // Loads stuff from an URL to an element like load_by_hash but:
@@ -571,6 +587,7 @@ Kobayashi.LOADED_MEDIA = {};
 
     function get_simple_load_arguments(specifier) {
         var target_id;
+        var COLON_LEN = 2;
         var colon_index = specifier.indexOf('::');
         if (colon_index < 0) {
             target_id = Kobayashi.DEFAULT_TARGET;
@@ -579,7 +596,7 @@ Kobayashi.LOADED_MEDIA = {};
             target_id = specifier.substr(0, colon_index);
         }
         
-        var address = get_hashadr(specifier);
+        var address = get_hashadr(specifier, {not_correct_get_parameters: false});
         
         if (LOADED_URLS[target_id] == address) {
             $('#'+target_id).slideUp('fast');
@@ -590,13 +607,40 @@ Kobayashi.LOADED_MEDIA = {};
         return {target_id:target_id, address:address};
     }
     Kobayashi.get_simple_load_arguments = get_simple_load_arguments;
+
+    // Returns object containing HTTP GET parameters 
+    function split_get_arguments(url) {
+        var out = new Object();
+        var qmark_position = url.indexOf('?');
+        if (url.length == 0 || qmark_position < 0 || (qmark_position + 1) >= url.length) {
+            return out;
+        }
+        var get_parameters = url.substr(qmark_position + 1);
+        if (get_parameters.length == 0) {
+            get_parameters = url;
+        }
+        var assignments = get_parameters.split(/&/);
+        
+        for (var i = 0; i < assignments.length; i++) {
+            var ass = assignments[i];
+            var param = (ass.indexOf('=') < 0) ? ass : ass.substr(0, ass.indexOf('='));
+            if (param.length == 0) {
+                continue;
+            }
+            var value = ass.substr(ass.indexOf('=') + 1);
+            out[param] = value;
+        }
+        return out;
+    }
+    Kobayashi.split_get_arguments = split_get_arguments;
     
     // Set up event handlers
     $('.js-simpleload,.js-simpleload-container a').live('click', function(evt) {
         if (evt.button != 0) return true;    // just interested in left button
-        if ( $(this).data('hashadred') ) return true;
-        simple_load($(this).attr('href'));
-        $(this).data('simpleloaded', true);
+        var $this = $(this);
+        if ( $this.data('hashadred') ) return true;
+        simple_load($this.attr('href'));
+        $this.data('simpleloaded', true);
         evt.preventDefault();
     });
     $('.js-hashadr,.js-hashadr-container a').live('click', function(evt) {
@@ -642,20 +686,20 @@ Kobayashi.LOADED_MEDIA = {};
 //   to compensate for hash and LOADED_URLS inconsistencies.
 function adr(address, options) {
     if (address == undefined) {
-        carp('No address given to adr()');
+        log_kobayashi.log('No address given to adr()');
         return;
     }
     
     function set_location_hash(newhash, options) {
         if (newhash.charAt(0) != '#') newhash = '#' + newhash;
-        if (options.just_set) {
-            CURRENT_HASH = newhash;
-        }
         if (options.nohistory) {
             location.replace( newhash );
         }
         else {
             location.hash = newhash;
+        }
+        if (options.just_set) {
+            CURRENT_HASH = location.hash;
         }
     }
     
@@ -756,6 +800,7 @@ function adr(address, options) {
     
     // We've not gotten the address from a previous recursive call, thus modify the address as needed.
     if (new_address == undefined) {
+        log_kobayashi.log('address:', address);
         new_address = address;
         
         // empty address -- remove the specifier
@@ -780,24 +825,20 @@ function adr(address, options) {
             }
             else  {
                 var assignments = address.substr(1).split(/&/);
+                newq = '';
                 for (var i = 0; i < assignments.length; i++) {
                     var ass = assignments[i];
                     var vname = (ass.indexOf('=') < 0) ? ass : ass.substr(0, ass.indexOf('='));
                     if (vname.length == 0) {
-                        carp('invalid assignment: ' + ass);
+                        log_kobayashi.log('invalid assignment: ' , ass);
                         continue;
                     }
-                    var vname_esc = vname.replace(/\W/g, '\\$1');
-                    var vname_re = new RegExp('(^|[?&])' + vname_esc + '(?:=[^?&]*)?(&|$)');
-                    var changedq = newq.replace(vname_re, '\$1' + ass + '\$2');
-                    
-                    // vname was not in oldq -- append
-                    // the second condition is there so that when we have ?v and call &v we won't get ?v&v but still ?v
-                    if (changedq == newq && !vname_re.test(newq)) {
-                        newq = newq + '&' + ass;
+                    if (newq == '') {
+                        newq = '?';
                     }
-                    else {
-                        newq = changedq;
+                    newq = newq + ass;
+                    if (i <= (assignments.length - 1)) {
+                        newq = newq + '&';
                     }
                 }
             }
@@ -864,11 +905,11 @@ function get_hash(address, options) {
         if (Kobayashi.LOADED_MEDIA[ url ]) {
             if ($.isFunction(succ_fn)) succ_fn(url);
             if ($.isFunction(next_fn)) next_fn(url);
-            ;;; carp('Skipping loaded medium: '+url);
+            ;;; log_kobayashi.log('Skipping loaded medium: ', url);
             return true;
         }
         
-        ;;; carp('loading medium '+url);
+        ;;; log_kobayashi.log('loading medium ',url);
         
         url.match(/(?:.*\/\/[^\/]*)?([^?]+)(?:\?.*)?/);
         $(document).data('loaded_media')[ RegExp.$1 ] = url;
@@ -889,8 +930,8 @@ function get_hash(address, options) {
             try {
                 if (stylesheet.cssRules) return stylesheet.cssRules;
                 if (stylesheet.rules   ) return stylesheet.rules;
-            } catch(e) { carp(e); }
-            carp('Could not get rules from: ', stylesheet);
+            } catch(e) { log_kobayashi.log(e); }
+            log_kobayashi.log('Could not get rules from: ', stylesheet);
             return;
         }
         
@@ -898,15 +939,15 @@ function get_hash(address, options) {
             if (stylesheet_present(abs_url)) {
                 if ($.isFunction(succ_fn)) succ_fn(url);
                 if ($.isFunction(next_fn)) next_fn(url);
-                ;;; carp('Stylesheet already present: '+url);
+                ;;; log_kobayashi.log('Stylesheet already present: ',url);
                 return true;
             }
-            var tries = 100;
+            var tries = KOBAYASHI_CSS_LOAD_TRIES;
             
             setTimeout(function() {
                 if (--tries < 0) {
                     Kobayashi.LOADED_MEDIA[ url ] = false;
-                    carp('Timed out loading CSS: '+url);
+                    log_kobayashi.log('Timed out loading CSS: ',url);
                     if ($.isFunction(err_fn)) err_fn(url);
                     return;
                 }
@@ -916,18 +957,18 @@ function get_hash(address, options) {
                     if (rules && rules.length) {
                         Kobayashi.LOADED_MEDIA[ url ] = true;
                         if ($.isFunction(succ_fn)) succ_fn(url);
-                        ;;; carp('CSS Successfully loaded: '+url);
+                        ;;; log_kobayashi.log('CSS Successfully loaded: ',url);
                         
                     }
                     else {
                         Kobayashi.LOADED_MEDIA[ url ] = false;
-                        if (rules) carp('CSS stylesheet empty.');
+                        if (rules) log_kobayashi.log('CSS stylesheet empty.');
                         if ($.isFunction(err_fn)) err_fn(url);
                         return;
                     }
                 }
-                else setTimeout(arguments.callee, 100);
-            }, 100);
+                else setTimeout(arguments.callee, KOBAYASHI_CSS_LOAD_TIMEOUT);
+            }, KOBAYASHI_CSS_LOAD_TIMEOUT);
             
             var $csslink = $('<link rel="stylesheet" type="text/css" href="'+url+'" />').appendTo($('head'));
             if ($.isFunction(next_fn)) next_fn(url);
@@ -939,7 +980,7 @@ function get_hash(address, options) {
                 if ($scripts.get(i).src == abs_url) {
                     if ($.isFunction(succ_fn)) succ_fn(url);
                     if ($.isFunction(next_fn)) next_fn(url);
-                    ;;; carp('Script already present: '+url);
+                    ;;; log_kobayashi.log('Script already present: ',url);
                     return true;
                 }
             }
@@ -951,13 +992,13 @@ function get_hash(address, options) {
                     Kobayashi.LOADED_MEDIA[ this.url ] = true;
                     if ($.isFunction(succ_fn)) succ_fn(url);
                     if ($.isFunction(next_fn)) next_fn(url);
-                    ;;; carp('JS Successfully loaded: '+this.url);
+                    ;;; log_kobayashi.log('JS Successfully loaded: ',this.url);
                 },
                 error: function() {
                     Kobayashi.LOADED_MEDIA[ this.url ] = false;
                     if ($.isFunction( err_fn))  err_fn(url);
                     if ($.isFunction(next_fn)) next_fn(url);
-                    carp('Failed to load JS: '+url, this);
+                    log_kobayashi.log('Failed to load JS: ',url, this);
                 },
                 cache: true
             });
@@ -970,7 +1011,13 @@ function get_hash(address, options) {
     var media_queue = [];
     $(document).data('loaded_media', {});
     function init_media() {
-        $(document).trigger('media_loaded').data('loaded_media', {});
+        timer('trigger_ media_loaded');
+        try {
+            $(document).trigger('media_loaded').data('loaded_media', {});
+        } catch (e) {
+            log_kobayashi.log('Error when triggering media_loaded.', e);
+        }
+        timerEnd('trigger_ media_loaded');
     }
     function draw_media() {
         if (media_queue.length == 0) {
@@ -978,15 +1025,16 @@ function get_hash(address, options) {
             return true;
         }
         var url = media_queue.shift();
-        load_media(url, {next_fn: draw_media});
+        Kobayashi.load_media(url, {next_fn: draw_media});
     }
     
     // Load a CSS / JavaScript file (given an URL) after previously requested ones have been loaded / failed loading.
     function request_media(url) {
+        log_kobayashi.log('Request media ' , url);
         var do_start = media_queue.length == 0;
         media_queue.push(url);
         if (do_start) {
-            setTimeout(draw_media,20);
+            setTimeout(draw_media,100);
             $(document).trigger('media_loading_start');
         }
     }

@@ -1,3 +1,9 @@
+/** 
+ * DateTime widget.
+ * requires: jQuery 1.4.2+, 
+ *          str_concat() function (effective string concatenation).
+ *
+ */
 function DateTimeInput(input) {
     this.input = input;
     this.set_date = function(d, preserve) {
@@ -21,6 +27,7 @@ function DateTimeInput(input) {
         if (preserve.minute) d.setMinutes (minute);
 
         year = d.getFullYear();
+        // Fix 0-based month numbering:
         month = new Number(d.getMonth()) + 1;
         day = d.getDate();
         hour = d.getHours();
@@ -35,13 +42,14 @@ function DateTimeInput(input) {
             return s;
         }
 
-        var nval = ''
-        + pad(  year,4) + '-'
-        + pad( month,2) + '-'
-        + pad(   day,2) + ' '
-        + pad(  hour,2) + ':'
-        + pad(minute,2) + ' '
-        + dow;
+        var nval = [
+            pad(  year,4) , '-',
+            pad( month,2) , '-',
+            pad(   day,2) , ' ',
+            pad(  hour,2) , ':',
+            pad(minute,2) , ' ',
+            dow
+        ].join('');
         $(this.input).val( nval ).change();
     };
 }
@@ -77,11 +85,13 @@ function DateInput(input) {
             return s;
         }
 
-        var nval = ''
-        + pad(  year,4) + '-'
-        + pad( month,2) + '-'
-        + pad(   day,2) + ' '
-        + dow;
+        var nval = str_concat(
+        ''
+        , pad(  year,4) , '-'
+        , pad( month,2) , '-'
+        , pad(   day,2) , ' '
+        , dow
+        );
         $(this.input).val( nval ).change();
     };
 }
@@ -116,9 +126,9 @@ function DateInput(input) {
                     $input.data('dti', new DateInput(this));
                 }
 
-                $(  '<span class="js-dtpicker-trigger"><img src="'
-                    +MEDIA_URL
-                    +'ico/16/vcalendar.png" alt="cal" /></span>'
+                $(  str_concat('<span class="js-dtpicker-trigger"><img src="'
+                    ,MEDIA_URL
+                    ,'ico/16/vcalendar.png" alt="cal" /></span>')
                 )
                 .data('input', $input)
                 .insertAfter(this);

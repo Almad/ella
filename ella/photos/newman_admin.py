@@ -7,6 +7,7 @@ from ella.photos.models import FormatedPhoto, Format, Photo
 from ella.newman.utils import JsonResponse, JsonResponseError
 from ella.newman.config import STATUS_OBJECT_NOT_FOUND
 from ella.newman.filterspecs import CustomFilterSpec
+from ella.newman.licenses.models import License
 
 class PhotoSizeFilter(CustomFilterSpec):
 
@@ -33,6 +34,12 @@ class PhotoSizeFilter(CustomFilterSpec):
             self.links.append(link)
         return True
 
+    def generate_choice(self, **lookup_kwargs):
+        keys = self.get_lookup_kwarg()
+        for key in keys:
+            if key in lookup_kwargs:
+                return u'>%spx' % lookup_kwargs[key]
+
 
 class FormatAdmin(newman.NewmanModelAdmin):
     list_display = ('name', 'max_width', 'max_height', 'stretch', 'resample_quality',)
@@ -42,12 +49,17 @@ class FormatAdmin(newman.NewmanModelAdmin):
 class FormatedPhotoInlineAdmin(newman.NewmanTabularInline):
     model = FormatedPhoto
 
+def photo_get_list_display():
+    if License._meta.installed:
+        return ('title', 'size', 'thumb', 'license_info', 'pk',)
+    return ('title', 'size', 'thumb', 'pk',)
+
 class PhotoAdmin(newman.NewmanModelAdmin):
-    list_display = ('title', 'size', 'thumb', 'pk',)
+    list_display = photo_get_list_display()
     list_filter = ('created',)
     unbound_list_filter = (PhotoSizeFilter,)
     prepopulated_fields = {'slug': ('title',)}
-    search_fields = ('title', 'slug', 'description', 'id',)
+    search_fields = ('title', 'slug', 'id',)
     suggest_fields = {'authors': ('name', 'slug',), 'source': ('name', 'url',)}
     rich_text_fields = {'small': ('description',)}
 
@@ -61,6 +73,17 @@ class PhotoAdmin(newman.NewmanModelAdmin):
     def size(self, obj):
         return "%dx%d px" % (obj.width, obj.height)
     size.short_description = _('Size')
+
+    def license_info(self, obj):
+        if not License._meta.installed:
+            return "---"
+        try:
+            license = License.objects.get(ct=self.model_content_type, obj_id=obj.id)
+        except License.DoesNotExist:
+            return '---'
+        return u"%sx (%s)" % (license.max_applications, license.note)
+    license_info.short_description = _('Max applications')
+
 
     def get_urls(self):
         urlpatterns = patterns('',

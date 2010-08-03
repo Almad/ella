@@ -22,6 +22,7 @@
                         {% comment %}
                         #<span>{{ inline_admin_form.original.order }}</span> &mdash;
                         {% endcomment %}
+                        <span></span> {# JS gallery inline compatibility glue #}
                         <span>{{ inline_admin_form.original.target }}</span>
                         {% if inline_admin_form.show_url %}
                             &nbsp;<a class="icn web" href="{% url newman:obj-redirect inline_admin_form.original_content_type_id inline_admin_form.original.id %}">{% trans "View on site" %}</a>
@@ -34,7 +35,24 @@
                             {{ field.field }}
                     {% endfor %}
                 {% endfor %}
-                {% if inline_admin_formset.formset.can_delete and inline_admin_form.original %}<span class="delete">{{ inline_admin_form.deletion_field.field }} {{ inline_admin_form.deletion_field.label_tag }}</span>{% endif %}
+                {% if inline_admin_formset.formset.can_delete and inline_admin_form.original %}
+                    <div class="delete">
+                        {{ inline_admin_form.deletion_field.field }} {{ inline_admin_form.deletion_field.label_tag }}
+                    </div>
+                {% else %}
+                    {% if inline_admin_formset.formset.can_delete %}
+                    <div class="delete-item noscreen">{# Fake delete button if item is in unsaved state #}
+                        <input type="checkbox" 
+                        id="id_{{ inline_admin_form.form.prefix }}-DELETE" 
+                        name="{{ inline_admin_form.form.prefix }}-DELETE" />
+                        <label 
+                            for="id_{{ inline_admin_form.form.prefix }}-DELETE" 
+                            class="vCheckboxLabel inline">{% trans "Delete" %}
+                        </label>
+                    </div>
+                    {% endif %}
+                {% endif %}
+
                     <div class="cb"></div>
                 </div>
             {% endfor %}
@@ -43,22 +61,11 @@
         </div>
     {% endfor %}
 
-        <div style="margin: 5px;"><a class="icn btn add add-gallery-item-button">{% trans "Add" %}</a></div>
+        <div class="gallery-add-item">
+            <a class="icn btn add add-gallery-item-button">{% trans "Add" %}</a>
+        </div>
     </fieldset>
 
 </div>
 <script type="text/javascript">request_media('{{ NEWMAN_MEDIA_URL }}jquery/jquery-ui.js');</script>
-<script type="text/javascript">request_media('{{ NEWMAN_MEDIA_URL }}js/inlines.js');</script>
-
-<script type="text/javascript">
-    function call_newman_inline_disable_gallery_target_id() {
-        // call had to be encapsulated due to NewmanInline object is not available 
-        // when binding to 'media_loaded' event
-        NewmanInline.disable_gallery_target_id();
-    }
-    $(document).one(
-        'media_loaded', 
-        call_newman_inline_disable_gallery_target_id
-    );
-</script>
 {% endspaceless %}

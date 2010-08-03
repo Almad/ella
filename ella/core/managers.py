@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db import models
-from django.db.models import F
+from django.db.models import F, Q
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.utils.encoding import smart_str
@@ -11,6 +11,7 @@ from ella.core.cache.invalidate import CACHE_DELETER
 
 
 DEFAULT_LISTING_PRIORITY = getattr(settings, 'DEFAULT_LISTING_PRIORITY', 0)
+USE_PRIORITIES = getattr(settings, 'USE_PRIORITIES', False)
 
 
 class RelatedManager(models.Manager):
@@ -158,8 +159,30 @@ class ListingManager(models.Manager):
             offset - starting with object number... 1-based
             mods - list of Models, if empty, object from all models are included
             [now] - datetime used instead of default datetime.now() value
+            [unique] - set of already listed Placement IDs
             **kwargs - rest of the parameter are passed to the queryset unchanged
         """
+        def mark_before_output(output):
+            for l in output:
+                listed_targets.add(l.placement_id)
+
+        def make_items_unique(qset):
+
+            out = []
+            listed_targets_now = set()
+            for l in qset:
+                tgt = l.placement_id
+                if tgt in listed_targets or tgt in listed_targets_now:
+                    continue
+                listed_targets_now.add(tgt)
+                out.append(l)
+                if len(out) == limit:
+                    result = out[offset:limit]
+                    mark_before_output(result)
+                    return result
+            mark_before_output(out)
+            return out 
+
         # TODO try to write  SQL (.extra())
         assert offset > 0, "Offset must be a positive integer"
         assert count >= 0, "Count must be a positive integer"
@@ -176,8 +199,16 @@ class ListingManager(models.Manager):
         offset -= 1
         limit = offset + count
 
+        # take out unwanted objects
+        if unique:
+            listed_targets = unique.copy()
+        else:
+            listed_targets = set([])
+
         # only use priorities if somebody wants them
-        if not getattr(settings, 'USE_PRIORITIES', False):
+        if not USE_PRIORITIES:
+            if unique:
+                return make_items_unique(qset)
             return qset[offset:limit]
 
 
@@ -200,24 +231,17 @@ class ListingManager(models.Manager):
 
         out = []
 
-        # take out not unwanted objects
-        if unique:
-            listed_targets = unique.copy()
-        else:
-            listed_targets = set([])
-
         # iterate through qsets until we have enough objects
         for q in qsets:
-            data = q[:limit]
-            if data:
-                for l in data:
-                    tgt = l.placement_id
-                    if tgt in listed_targets:
-                        continue
-                    listed_targets.add(tgt)
-                    out.append(l)
-                    if len(out) == limit:
-                        return out[offset:limit]
+            data = q.iterator()
+            for l in data:
+                tgt = l.placement_id
+                if tgt in listed_targets:
+                    continue
+                listed_targets.add(tgt)
+                out.append(l)
+                if len(out) == limit:
+                    return out[offset:limit]
         return out[offset:offset + count]
 
     def get_queryset_wrapper(self, kwargs):
@@ -243,9 +267,9 @@ class ListingQuerySetWrapper(object):
         return self._count
 
 
-def get_top_objects_key(func, self, count, mods=[]):
-    return 'ella.core.managers.HitCountManager.get_top_objects_key:%d:%d:%s' % (
-            settings.SITE_ID, count, ','.join('.'.join(str(model._meta) for model in mods))
+def get_top_objects_key(func, self, count, days=None, mods=[]):
+    return 'ella.core.managers.HitCountManager.get_top_objects_key:%d:%d:%s:%s' % (
+            settings.SITE_ID, count, str(days), ','.join('.'.join(str(model._meta) for model in mods))
         )
 
 class HitCountManager(models.Manager):
@@ -257,11 +281,21 @@ class HitCountManager(models.Manager):
             hc = self.create(placement=placement, hits=1)
 
     @cache_this(get_top_objects_key)
-    def get_top_objects(self, count, mods=[]):
+    def get_top_objects(self, count, days=None, mods=[]):
         """
         Return count top rated objects. Cache this for 10 minutes without any chance of cache invalidation.
         """
-        kwa = {}
+        qset = self.filter(placement__category__site=settings.SITE_ID).order_by('-hits')
+
         if mods:
-            kwa['placement__publishable__content_type__in'] = [ ContentType.objects.get_for_model(m) for m in mods ]
-        return list(self.filter(placement__category__site=settings.SITE_ID, **kwa).order_by('-hits')[:count])
+            qset = qset.filter(placement__publishable__content_type__in = [ ContentType.objects.get_for_model(m) for m in mods ])
+
+        now = datetime.now()
+        if days is None:
+            qset = qset.filter(placement__publish_from__lte=now)
+        else:
+            start = now - timedelta(days=days)
+            qset = qset.filter(placement__publish_from__range=(start, now,))
+        qset = qset.filter(Q(placement__publish_to__gt=now) | Q(placement__publish_to__isnull=True))
+
+        return list(qset[:count])

@@ -1,9 +1,11 @@
 import logging
+import re
 
 from django.conf import settings
 from django.contrib import admin
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.admin.options import InlineModelAdmin, IncorrectLookupParameters, FORMFIELD_FOR_DBFIELD_DEFAULTS
+from django.contrib.admin.util import unquote
 from django.forms.models import BaseInlineFormSet
 from django import template
 from django.http import HttpResponse, HttpResponseRedirect, HttpResponseForbidden
@@ -152,6 +154,9 @@ class NewmanModelAdmin(XModelAdmin):
         self.list_per_page = DEFAULT_LIST_PER_PAGE
         self.model_content_type = ContentType.objects.get_for_model(self.model)
         self.saveasnew_add_view = self.add_json_view
+        # useful when self.queryset(request) is called multiple times
+        self._cached_queryset_request_id = -1
+        self._cached_queryset = None 
 
     def get_form(self, request, obj=None, **kwargs):
         self._magic_instance = obj # adding edited object to ModelAdmin instance.
@@ -195,6 +200,9 @@ class NewmanModelAdmin(XModelAdmin):
             url(r'^(.+)/json/$',
                 wrap(self.change_json_view),
                 name='%s_%s_change_json' % info),
+            url(r'^(.+)/json/detail/$',
+                wrap(self.model_detail_json_view),
+                name='%s_%s_json_detail' % info),
         )
         urlpatterns += super(NewmanModelAdmin, self).get_urls()
         return urlpatterns
@@ -247,9 +255,9 @@ class NewmanModelAdmin(XModelAdmin):
         """ Autosave data (dataloss-prevention) or save as (named) template """
         def delete_too_old_drafts():
             " remove autosaves too old to rock'n'roll "
-            to_delete = AdminUserDraft.objects.filter(title__exact='').order_by('-ts')
+            to_delete = AdminUserDraft.objects.filter(title__exact='', user=request.user).order_by('-ts')
             for draft in to_delete[AUTOSAVE_MAX_AMOUNT:]:
-                log.debug('Deleting too old user draft (autosave) %s' % draft)
+                log.debug('Deleting too old user draft (autosave) %d' % draft.pk)
                 draft.delete()
 
         self.register_newman_variables(request)
@@ -284,7 +292,6 @@ class NewmanModelAdmin(XModelAdmin):
         data = {'id': obj.pk, 'title': obj.__unicode__()}
         return utils.JsonResponse(_('Preset %s was saved.' % obj.__unicode__()), data)
 
-    @utils.profiled_section
     @require_AJAX
     def load_draft_view(self, request, extra_context=None):
         """ Returns draft identified by request.GET['id'] variable. """
@@ -320,7 +327,6 @@ class NewmanModelAdmin(XModelAdmin):
         draft.delete()
         return utils.JsonResponse(msg)
 
-    @utils.profiled_section
     @require_AJAX
     def filters_view(self, request, extra_context=None):
         "stolen from: The 'change list' admin view for this model."
@@ -381,10 +387,34 @@ class NewmanModelAdmin(XModelAdmin):
         return render_to_response(self.get_template_list('action_log.html'), context, context_instance=template.RequestContext(request))
 
 
-    @utils.profiled_section
     #@require_AJAX
     def changelist_view(self, request, extra_context=None):
         self.register_newman_variables(request)
+
+        # save per user filtered content type.
+        is_popup = False
+        req_path = request.get_full_path()
+        ct = ContentType.objects.get_for_model(self.model)
+        # persistent filter for non-popupped changelists only
+        key = 'filter__%s__%s' % (ct.app_label, ct.model)
+        if req_path.find('pop') >= 0: # if popup is displayed, remove pop string from request path
+            is_popup = True
+            req_path = re.sub(r'(.*)(pop=&|&pop=|pop=|pop&|&pop|pop)(.*)', r'\1\3', req_path)
+        if req_path.endswith('?') and is_popup:
+            req_path = '' # if popup with no active filters is displayed, do not save empty filter settings
+        if req_path.find('?') > 0:
+            url_args = req_path.split('?', 1)[1]
+            utils.set_user_config_db(request.user, key, url_args)
+            log.debug('SAVING FILTERS %s' % url_args)
+        else:
+            user_filter = utils.get_user_config(request.user, key)
+            if user_filter:
+                if is_popup:
+                    user_filter = 'pop&%s' % user_filter
+                redirect_to = '%s?%s' % (request.path, user_filter)
+                if not redirect_to.endswith('?q='):
+                    log.debug('REDIRECTING TO %s' % redirect_to)
+                    return utils.JsonResponseRedirect(redirect_to)
 
         context = super(NewmanModelAdmin, self).get_changelist_context(request)
         if type(context) != dict:
@@ -394,27 +424,11 @@ class NewmanModelAdmin(XModelAdmin):
             raw_media = self.prepare_media(context['media'])
             context['media'] = raw_media
 
-        # save per user filtered content type.
-        req_path = request.get_full_path()
-        ct = ContentType.objects.get_for_model(self.model)
-        # persistent filter for non-popupped changelists only
-        key = 'filter__%s__%s' % (ct.app_label, ct.model)
-        if req_path.find('pop') < 0:
-            if req_path.find('?') > 0:
-                url_args = req_path.split('?', 1)[1]
-                utils.set_user_config_db(request.user, key, url_args)
-            else:
-                user_filter = utils.get_user_config(request.user, key)
-                if user_filter:
-                    redirect_to = '%s?%s' % (request.path, user_filter)
-                    return utils.JsonResponseRedirect(redirect_to)
-
         context['is_filtered'] = context['cl'].is_filtered()
         context['is_user_category_filtered'] = utils.is_user_category_filtered( self.queryset(request) )
         context.update(extra_context or {})
         return render_to_response(self.change_list_template, context, context_instance=template.RequestContext(request))
 
-    @utils.profiled_section
     @require_AJAX
     def suggest_view(self, request, extra_context=None):
         self.register_newman_variables(request)
@@ -517,13 +531,11 @@ class NewmanModelAdmin(XModelAdmin):
     def register_newman_variables(self, request):
         self.user = request.user
 
-    @utils.profiled_section
     def has_view_permission(self, request, obj):
         opts = self.opts
         view_perm = '%s.view_%s' % ( opts.app_label, opts.object_name.lower() )
         return request.user.has_perm(view_perm)
 
-    @utils.profiled_section
     def has_model_view_permission(self, request, obj=None):
         """ returns True if user has permission to view this model, otherwise False. """
         # try to find view or change perm. for given user in his permissions or groups permissions
@@ -546,7 +558,6 @@ class NewmanModelAdmin(XModelAdmin):
         # no permission found
         return False
 
-    @utils.profiled_section
     def has_change_permission(self, request, obj=None):
         """
         Returns True if the given request has permission to change the given
@@ -627,7 +638,6 @@ class NewmanModelAdmin(XModelAdmin):
             media = media + inline_admin_formset.media
         return inline_admin_formsets, media
 
-    @utils.profiled_section
     def json_error_response(self, request, context):
         """
         Chyby v polich formulare
@@ -689,6 +699,9 @@ class NewmanModelAdmin(XModelAdmin):
                         'messages': map(lambda item: item, map(give_me_unicode, err_item[key]))
                     }
                     error_list.append(err_dict)
+        # Other errors (e.g. db errors)
+        if 'error_dict' in context and 'id___all__' in context['error_dict']:
+            error_list.append({'messages': context['error_dict']['id___all__'], 'id': 'id___all__',})
 
         return utils.JsonResponse(_('Please correct errors in form'), errors=error_list, status=STATUS_FORM_ERROR)
 
@@ -725,7 +738,26 @@ class NewmanModelAdmin(XModelAdmin):
         self.change_view_process_context(request, context, object_id)
         return context
 
-    @utils.profiled_section
+    def model_detail_json_view(self, request, object_id, extra_context=None):
+        " Outputs basic object's data. "
+        obj = None
+        try:
+            obj = self.queryset(request).get(pk=unquote(object_id))
+        except model.DoesNotExist:
+            obj = None
+        if not self.has_model_view_permission(request, obj):
+            raise PermissionDenied
+
+        result_dict = dict()
+        for field in obj._meta.fields:
+            result_dict[field.name] = field.value_to_string(obj)
+
+        return utils.JsonResponse(
+            'JSON object detail data.',
+            result_dict,
+            status=STATUS_OK
+        )
+
     @transaction.commit_on_success
     def change_json_view(self, request, object_id, extra_context=None):
         "The 'change' admin view for this model."
@@ -758,7 +790,6 @@ class NewmanModelAdmin(XModelAdmin):
         context.update(extra_context or {})
         return self.json_error_response(request, context)  # Json response
 
-    @utils.profiled_section
     def change_view(self, request, object_id, extra_context=None):
         "The 'change' admin view for this model."
         if request.method.upper() != 'GET':
@@ -850,6 +881,10 @@ class NewmanModelAdmin(XModelAdmin):
         First semi-working draft of category-based permissions. It will allow permissions to be set per category
         effectively hiding the content the user has no permission to see/change.
         """
+        # return cached queryset, if possible
+        if self._cached_queryset_request_id == id(request) and type(self._cached_queryset) != type(None):
+            return self._cached_queryset
+
         q = super(NewmanModelAdmin, self).queryset(request)
         # user category filter
         qs = utils.user_category_filter(q, request.user)
@@ -869,6 +904,10 @@ class NewmanModelAdmin(XModelAdmin):
 #        return permission_filtered_model_qs(qs, request.user, perms)
         qs_tmp = permission_filtered_model_qs(qs, request.user, perms)
         utils.copy_queryset_flags(qs_tmp, qs)
+
+        # cache the result
+        self._cached_queryset_request_id = id(request)
+        self._cached_queryset = qs_tmp
         return qs_tmp
 
 

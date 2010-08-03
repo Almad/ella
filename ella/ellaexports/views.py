@@ -3,13 +3,14 @@ from datetime import datetime
 from django.http import Http404
 from django.conf import settings
 from django.template.defaultfilters import slugify
+from django.template import RequestContext
 from django.utils.translation import ugettext as _
 
 from ella.core.models import Listing, Category, Placement
 from ella.core.cache import get_cached_object_or_404, cache_this
 from ella.core.cache.template_loader import render_to_response
 from ella.core.views import EllaCoreView
-from ella.ellaexports.models import Export, ExportMeta, ExportPosition
+from ella.ellaexports.models import Export, AggregatedExport, ExportMeta, ExportPosition
 from ella.ellaexports.models import UnexportableException
 
 
@@ -117,55 +118,34 @@ class MrssExport(EllaCoreView):
         })
         return context
 
+    def render(self, request, context, template):
+        return render_to_response(
+            template, 
+            context,
+            context_instance=RequestContext(request),
+            content_type='application/xml'
+        )
+
     #def __call__(self, *args, **kwargs):
     #    super(MrssExport, self).__call__(*args, **kwargs)
 
 mrss_export = MrssExport()
 
-class AggregatedExport(MrssExport):
+class AggregatedMrssExport(MrssExport):
     template_name = 'aggregated_export.xml'
 
     def get_context(self, request, **kwargs):
-        remainder = kwargs.get('url_remainder', '')
-        slugs = remainder.split('/')
-        if not slugs:
-            raise Http404
-        slugs = filter(lambda s: s != '', slugs)
-
-        now = datetime.now()
-        export = None
-        export_object = None
-        titles = []
-        links = []
-        descriptions = []
-        items = []
-        context = dict()
-
-        for slug in slugs:
-            for i in Export.objects.get_items_for_slug(slug=slug):
-                items.append(i)
-
-            try:
-                export_object = Export.objects.get(slug=slug)
-            except Export.DoesNotExist:
-                raise Http404(_('Export with given slug [%s] does not exist.' % slug))
-
-            titles.append( export_object.title )
-            links.append( export_object.url )
-            descriptions.append( export_object.description )
+        slug = kwargs.get('slug', None)
+        export_object = get_cached_object_or_404(AggregatedExport, slug=slug)
 
         context = {
-            'export_slug': '.'.join(slugs),
+            'export_slug': slug,
             'export_object': export_object,
-            'exported_items': items,
-            'titles': titles,
-            'links': links,
-            'descriptions': descriptions,
             'category': None
         }
         return context
 
-aggregated_export = AggregatedExport()
+aggregated_export = AggregatedMrssExport()
 
 
 # EOF

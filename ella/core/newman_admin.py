@@ -13,6 +13,7 @@ from django.template.defaultfilters import date
 from django.conf import settings
 
 from ella.core.models import Author, Source, Category, Listing, HitCount, Placement, Related, Publishable
+from ella.core.models import PUBLISH_FROM_WHEN_EMPTY
 from ella import newman
 from ella.newman import options, fields
 from ella.newman.filterspecs import CustomFilterSpec, NewmanSiteFilter
@@ -148,6 +149,9 @@ class PlacementForm(modelforms.ModelForm):
         if obj.pk:
             cat = getattr(obj, 'category', None)
         obj_slug = getattr(obj, 'slug', obj.pk)
+        # if Placement has no slug, slug from Publishable object should be considered in following checks:
+        if not obj_slug:
+            obj_slug = self.cleaned_data['publishable'].slug
 
         main = None
         d = self.cleaned_data
@@ -163,7 +167,7 @@ class PlacementForm(modelforms.ModelForm):
         qset = Placement.objects.filter(
             category=d['category'],
             slug=d['slug'],
-            publishable=obj,
+            #publishable=obj,
             static=d['static']
         )
         if d['static']: # allow placements that do not overlap
@@ -189,7 +193,7 @@ class PlacementForm(modelforms.ModelForm):
                     category %(category)s with the same URL referring to %(target)s.
                     Please change the slug or publish date.''') % {
                         'category' : plac.category,
-                        'target' : plac.target,
+                        'target' : plac.publishable,
                     })
 
         if cat and not main:
@@ -257,11 +261,17 @@ class CategoryAdmin(newman.NewmanModelAdmin):
     suggest_fields = {'tree_parent': ('__unicode__', 'title', 'slug')}
 
 class HitCountAdmin(newman.NewmanModelAdmin):
-    list_display = ('target', 'hits', 'target_url')
+    list_display = ('target', 'hits', 'publish_from', 'target_url')
 #    list_filter = ('placement__category', 'placement__publish_from')
     raw_id_fields = ('placement',)
     search_fields = ('placement__category__title', 'placement__publishable__pk', 'placement__publishable__title', 'placement__publishable__slug' )
     ordering = ('-hits', '-last_seen',)
+
+    def publish_from(self, object):
+        return object.placement.publish_from
+    publish_from.short_description = _('Publish from')
+    publish_from.allow_tags = True
+    publish_from.order_field = 'placement__publish_from'
 
     def target_url(self, object):
         target = object.target()
@@ -303,13 +313,17 @@ class RelatedInlineAdmin(newman.GenericTabularInline):
 class IsPublishedFilter(CustomFilterSpec):
     " Published/Nonpublished objects filter"
     lookup_var = 'publish_from'
+    PUBLISH_FROM_WHEN_EMPTY = PUBLISH_FROM_WHEN_EMPTY.strftime('%Y-%m-%d')
+    CAPTION_ALL_WITH_PLACEMENT = _('All with placement')
+    CAPTION_YES = _('Yes')
+    CAPTION_NO = _('No')
 
     def title(self):
         return _('Is published?')
 
     def get_lookup_kwarg(self):
         for param in self.request_get:
-            if param.startswith("%s__gt" % self.lookup_var) or param.startswith("%s__lte" % self.lookup_var):
+            if param.startswith('%s__gt' % self.lookup_var) or param.startswith('%s__lt' % self.lookup_var):
                 self.selected_lookup = param
                 return param
         return ''
@@ -321,14 +335,31 @@ class IsPublishedFilter(CustomFilterSpec):
         lookup_var_published = '%s__lte' % self.lookup_var
         lookup_var_has_placement = '%s__lt' % self.lookup_var
         now = time.strftime('%Y-%m-%d')
-        link = ( _('No'), {lookup_var_not_published: now})
+        link = ( self.CAPTION_NO, {lookup_var_not_published: now})
         self.links.append(link)
-        link = ( _('Yes'), {lookup_var_published: now})
+        link = ( self.CAPTION_YES, {lookup_var_published: now})
         self.links.append(link)
-        link = ( _('All with placement'), {lookup_var_has_placement: '3000-1-1'})
+        link = ( 
+            self.CAPTION_ALL_WITH_PLACEMENT, 
+            {
+                lookup_var_has_placement: self.PUBLISH_FROM_WHEN_EMPTY
+            }
+        )
         self.links.append(link)
         self.remove_from_querystring = [lookup_var_published, lookup_var_not_published, lookup_var_has_placement]
         return True
+
+    def generate_choice(self, **lookup_kwargs):
+        param = self.get_lookup_kwarg()
+        if not param:
+            return None
+        if lookup_kwargs[param] == self.PUBLISH_FROM_WHEN_EMPTY:
+            return self.CAPTION_ALL_WITH_PLACEMENT
+        elif param.startswith('%s__gt' % self.lookup_var):
+            return self.CAPTION_NO
+        elif param.startswith('%s__lte' % self.lookup_var):
+            return self.CAPTION_YES 
+        return None
 
 class PublishFromFilter(CustomFilterSpec):
     " Publish from customized filter. "
@@ -365,6 +396,13 @@ class PublishFromFilter(CustomFilterSpec):
             self.links.append(link)
         return True
 
+    def generate_choice(self, **lookup_kwargs):
+        args = self.get_lookup_kwarg()
+        day = lookup_kwargs[args[0]]
+        month = lookup_kwargs[args[1]]
+        year = lookup_kwargs[args[2]]
+        return u'%s. %s. %s' % (day, month, year)
+
 class PlacementAdmin(newman.NewmanModelAdmin):
     list_display = ('publishable', 'category', 'publish_from',)
     list_filter = ('category',)
@@ -394,7 +432,7 @@ class PublishableAdmin(newman.NewmanModelAdmin):
         'source': ('name', 'url',),
     }
 
-    inlines = [PlacementInlineAdmin, RelatedInlineAdmin]
+    inlines = [PlacementInlineAdmin]
 
     def admin_link(self, object):
         ct = object.content_type

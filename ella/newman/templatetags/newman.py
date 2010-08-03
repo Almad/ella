@@ -1,16 +1,16 @@
 # -*- coding: UTF-8 -*-
 from django.contrib.contenttypes.models import ContentType
-
 from django import template
 from django.utils.encoding import smart_str
 from django.utils.text import capfirst
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext_lazy
+from django.utils.translation import ugettext_lazy, ugettext
 from django.core.urlresolvers import reverse
 
 from ella.newman import site, permission
 from ella.newman.utils import get_log_entries
 from ella.newman.config import NEWMAN_FAVORITE_ITEMS
+from ella.utils.text import cz_compare
 
 
 register = template.Library()
@@ -52,11 +52,16 @@ def newman_topmenu(context):
 
     # Sort the apps alphabetically.
     app_list = app_dict.values()
-    app_list.sort(lambda x, y: cmp(x['name'], y['name']))
+    app_list.sort(
+        lambda x, y: cz_compare(
+            ugettext( x['name'] ), 
+            ugettext( y['name'] )
+        )
+    )
 
     # Sort the models alphabetically within each app.
     for app in app_list:
-        app['models'].sort(lambda x, y: cmp(x['name'], y['name']))
+        app['models'].sort(lambda x, y: cz_compare(x['name'], y['name']))
 
     return {
         'NEWMAN_MEDIA_URL': context['NEWMAN_MEDIA_URL'],
@@ -67,12 +72,24 @@ def newman_topmenu(context):
 @register.inclusion_tag('newman/tpl_tags/newman_favorites.html', takes_context=True)
 def newman_favorites(context):
     global_favs = []
-    all_apps = newman_topmenu(context)
-    for app in all_apps['app_list']:
+    applications = newman_topmenu(context)['app_list']
+    for model_name in NEWMAN_FAVORITE_ITEMS:
+        app_name, model_name = model_name.lower().split('.', 1)
+        app = None
+        for a in applications:
+            if a['name'].lower() == app_name:
+                app = a
+                break
+        if not app:
+            continue
+        model_found = None
         for m in app['models']:
-            if m['model'] in NEWMAN_FAVORITE_ITEMS:
+            if m['model'] == model_name:
+                model_found = m
                 global_favs.append(m)
+                break
 
+    #global_favs.sort(lambda x, y: cz_compare(x['name'], y['name']))
     return {
         'NEWMAN_MEDIA_URL': context['NEWMAN_MEDIA_URL'],
         'favs': global_favs
