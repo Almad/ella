@@ -1,3 +1,12 @@
+Ella
+==========
+
+*This is fork, not the original thing - go to github.com/ella/ella for it*
+
+While I'd love this fork to cease, there are hardcore fixes for things not configurable in
+original Ella. Use at own risk.
+
+
 Ella is opensource CMS based on Django framework,
 designed for flexibility.
 
