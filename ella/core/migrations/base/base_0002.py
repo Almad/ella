@@ -153,9 +153,11 @@ class BasePublishableDataMigration(object):
         return [dict(zip(keys, v)) for v in gens]
 
     def backwards(self, orm):
+        self.orm = orm
         pass
 
     def forwards(self, orm):
+        self.orm = orm
         # migrate publishables
         self.forwards_publishable(orm)
         # migrate generic relations

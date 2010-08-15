@@ -118,6 +118,13 @@ class Migration:
     
     
     models = {
+        'contenttypes.contenttype': {
+            'Meta': {'unique_together': "(('app_label', 'model'),)", 'object_name': 'ContentType', 'db_table': "'django_content_type'"},
+            'app_label': ('django.db.models.fields.CharField', [], {'max_length': '100'}),
+            'id': ('django.db.models.fields.AutoField', [], {'primary_key': 'True'}),
+            'model': ('django.db.models.fields.CharField', [], {'max_length': '100'}),
+            'name': ('django.db.models.fields.CharField', [], {'max_length': '100'})
+        },
         'core.category': {
             'Meta': {'ordering': "('site','tree_path',)", 'unique_together': "(('site','tree_path'),)"},
             'description': ('models.TextField', ['_("Category Description")'], {'blank': 'True'}),
@@ -170,11 +177,6 @@ class Migration:
             'id': ('models.AutoField', [], {'primary_key': 'True'})
         },
         'auth.user': {
-            '_stub': True,
-            'id': ('models.AutoField', [], {'primary_key': 'True'})
-        },
-        'contenttypes.contenttype': {
-            'Meta': {'ordering': "('name',)", 'unique_together': "(('app_label','model'),)", 'db_table': "'django_content_type'"},
             '_stub': True,
             'id': ('models.AutoField', [], {'primary_key': 'True'})
         },

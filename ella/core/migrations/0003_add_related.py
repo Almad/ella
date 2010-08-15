@@ -6,15 +6,16 @@ import datetime
 class Migration:
     
     def forwards(self, orm):
+        pass
         
         # Adding model 'Related'
-        db.create_table('core_related', (
-            ('id', models.AutoField(primary_key=True)),
-            ('publishable', models.ForeignKey(orm.Publishable, verbose_name=_('Publishable'))),
-            ('related_ct', models.ForeignKey(orm['contenttypes.ContentType'], verbose_name=_('Content type'))),
-            ('related_id', models.IntegerField(_('Object ID'))),
-        ))
-        db.send_create_signal('core', ['Related'])
+#        db.create_table('core_related', (
+#            ('id', models.AutoField(primary_key=True)),
+#            ('publishable', models.ForeignKey(orm.Publishable, verbose_name=_('Publishable'))),
+#            ('related_ct', models.ForeignKey(orm['contenttypes.ContentType'], verbose_name=_('Content type'))),
+#            ('related_id', models.IntegerField(_('Object ID'))),
+#        ))
+#        db.send_create_signal('core', ['Related'])
         
     
     
