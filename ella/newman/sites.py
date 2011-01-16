@@ -23,10 +23,10 @@ from ella.newman.decorators import require_AJAX
 from ella.newman.utils import set_user_config_db, set_user_config_session, get_user_config,\
     JsonResponse, JsonResponseError, json_decode, user_category_filter
 from ella.newman.permission import has_model_list_permission, applicable_categories, permission_filtered_model_qs
-from ella.newman import config
+from ella.newman.conf import newman_settings
 from ella.newman.options import NewmanModelAdmin
-from ella.newman import actions
 from ella.utils.text import cz_compare
+from django.core.urlresolvers import reverse
 
 
 class NewmanSite(AdminSite):
@@ -34,11 +34,11 @@ class NewmanSite(AdminSite):
     index_template = 'newman/index.html'
     login_template = 'newman/login.html'
     app_index_template = 'newman/app_index.html'
+    password_change_template = 'newman/password_change_form.html'
+    password_change_done_template = 'newman/password_change_done.html'
 
     def __init__(self, name=None, app_name='newman'):
         super(NewmanSite, self).__init__(name=name, app_name=app_name)
-        self._actions = {'delete_selected': actions.delete_selected}
-        self._global_actions = self._actions.copy()
 
     def append_inline(self, to_models=(), inline=None):
         """
@@ -75,22 +75,22 @@ class NewmanSite(AdminSite):
         # Newman specific URLs
         urlpatterns = patterns('',
             (r'^django-admin/', include(djangoadmin.site.urls)),
-            url(r'^%s/err-report/$' % config.NEWMAN_URL_PREFIX,
+            url(r'^%s/err-report/$' % newman_settings.URL_PREFIX,
                 wrap(self.err_report),
                 name="err-report"),
-            url(r'^%s/$' % config.NEWMAN_URL_PREFIX,
+            url(r'^%s/$' % newman_settings.URL_PREFIX,
                 wrap(self.newman_index),
                 name="newman-index"),
-            url(r'^%s/editor-box/$' % config.NEWMAN_URL_PREFIX,
+            url(r'^%s/editor-box/$' % newman_settings.URL_PREFIX,
                 wrap(self.editor_box_view, cacheable=True),
                 name="editor-box"),
-            url(r'^%s/render-chunk/$' % config.NEWMAN_URL_PREFIX,
+            url(r'^%s/render-chunk/$' % newman_settings.URL_PREFIX,
                 wrap(self.render_chunk_template_view),
                 name="render-chunk"),
-            url(r'^%s/filter-by-main-categories/$' % config.NEWMAN_URL_PREFIX,
+            url(r'^%s/filter-by-main-categories/$' % newman_settings.URL_PREFIX,
                 wrap(self.filter_by_main_categories),
                 name="filter-by-main-categories"),
-            url(r'^%s/save-filters/$' % config.NEWMAN_URL_PREFIX,
+            url(r'^%s/save-filters/$' % newman_settings.URL_PREFIX,
                 wrap(self.filter_by_main_categories_save),
                 name="save-filters"),
             url(r'^r/(?P<content_type_id>\d+)/(?P<object_id>.+)/$',
@@ -103,7 +103,7 @@ class NewmanSite(AdminSite):
 
         if 'djangomarkup' in settings.INSTALLED_APPS:
             urlpatterns += patterns('',
-                url(r'^%s/editor-preview/$' % config.NEWMAN_URL_PREFIX,
+                url(r'^%s/editor-preview/$' % newman_settings.URL_PREFIX,
                     wrap(self.editor_preview),
 #                    'djangomarkup.views.transform',
                     name="djangomarkup-preview"),
@@ -111,6 +111,32 @@ class NewmanSite(AdminSite):
 
         urlpatterns += super(NewmanSite, self).get_urls()
         return urlpatterns
+
+    def password_change(self, request):
+        """
+        Handles the "change password" task -- both form display and validation.
+        """
+        from django.contrib.auth.views import password_change
+        if self.root_path is not None:
+            url = '%spassword_change/done/' % self.root_path
+        else:
+            url = reverse('newman:password_change_done', current_app=self.name)
+        defaults = {
+            'post_change_redirect': url
+        }
+        if self.password_change_template is not None:
+            defaults['template_name'] = self.password_change_template
+        return password_change(request, **defaults)
+
+    def password_change_done(self, request):
+        """
+        Displays the "success" page after a password change.
+        """
+        from django.contrib.auth.views import password_change_done
+        defaults = {}
+        if self.password_change_done_template is not None:
+            defaults['template_name'] = self.password_change_done_template
+        return password_change_done(request, **defaults)
 
     def i18n_javascript(self, request):
         """
@@ -129,7 +155,7 @@ class NewmanSite(AdminSite):
     def filter_by_main_categories(self, request, extra_context=None):
         data = {'sites': []}
         try:
-            data['sites'] = get_user_config(request.user, config.CATEGORY_FILTER)
+            data['sites'] = get_user_config(request.user, newman_settings.CATEGORY_FILTER)
         except KeyError:
             data['sites'] = []
         site_filter_form = SiteFilterForm(data=data, user=request.user)
@@ -138,7 +164,7 @@ class NewmanSite(AdminSite):
         if extra_context:
             context.update(extra_context)
         return render_to_response(
-            'newman/main-categories-filter.html', 
+            'newman/main-categories-filter.html',
             context,
             context_instance=template.RequestContext(request)
         )
@@ -147,11 +173,11 @@ class NewmanSite(AdminSite):
     def filter_by_main_categories_save(self, request, extra_content=None):
         site_filter_form = SiteFilterForm(user=request.user, data=request.POST)
         if site_filter_form.is_valid():
-            set_user_config_db(request.user, config.CATEGORY_FILTER, site_filter_form.cleaned_data['sites'])
-            set_user_config_session(request.session, config.CATEGORY_FILTER, site_filter_form.cleaned_data['sites'])
+            set_user_config_db(request.user, newman_settings.CATEGORY_FILTER, site_filter_form.cleaned_data['sites'])
+            set_user_config_session(request.session, newman_settings.CATEGORY_FILTER, site_filter_form.cleaned_data['sites'])
             return JsonResponse(ugettext('Your settings were saved.'))
         else:
-            return JsonResponseError(ugettext('Error in form.'), status=config.STATUS_FORM_ERROR)
+            return JsonResponseError(ugettext('Error in form.'), status=newman_settings.STATUS_FORM_ERROR)
 
     @require_AJAX
     def editor_preview(self, request, extra_context=None):
@@ -159,15 +185,21 @@ class NewmanSite(AdminSite):
         Returns rendered HTML for source text with styles
         """
 
+        if newman_settings.EDITOR_PREVIEW_TEMPLATE:
+            preview_template = newman_settings.EDITOR_PREVIEW_TEMPLATE
+        else:
+            preview_template = 'newman/editor-preview.html'
+
         context = template.RequestContext(request)
         from djangomarkup.views import transform
         rendered_response = transform(request)
         rendered_html = mark_safe(rendered_response.content)
-        context.update({'rendered_html': rendered_html})
+        preview_css = newman_settings.EDITOR_PREVIEW_CSS
+        context.update({'rendered_html': rendered_html, 'preview_css': preview_css})
         if extra_context:
             context.update(extra_context)
 
-        return render_to_response('newman/editor-preview.html', context,
+        return render_to_response(preview_template, context,
             context_instance=template.RequestContext(request)
         )
 
@@ -289,7 +321,7 @@ class NewmanSite(AdminSite):
         """
         data = {'sites': []}
         try:
-            data['sites'] = get_user_config(request.user, config.CATEGORY_FILTER)
+            data['sites'] = get_user_config(request.user, newman_settings.CATEGORY_FILTER)
         except KeyError:
             data['sites'] = []
 
@@ -342,16 +374,16 @@ class NewmanSite(AdminSite):
         if form.is_valid():
             try:
                 e = EmailMessage('Newman report: %s' % form.cleaned_data['err_subject'], form.cleaned_data['err_message'],
-                                 from_email=request.user.email, to=config.ERR_REPORT_RECIPIENTS)
+                                 from_email=request.user.email, to=newman_settings.ERR_REPORT_RECIPIENTS)
                 e.send()
                 return JsonResponse(ugettext('Your report was sent.'))
             except:
-                return JsonResponseError(ugettext('SMTP error.'), status=config.STATUS_SMTP_ERROR)
+                return JsonResponseError(ugettext('SMTP error.'), status=newman_settings.STATUS_SMTP_ERROR)
         else:
             error_dict = {}
             for e in form.errors:
                 error_dict[u"id_%s" % e] = [ u"%s" % ee for ee in form.errors[e] ]
-            return JsonResponse(ugettext('Subject or message is empty.'), errors=error_dict, status=config.STATUS_FORM_ERROR)
+            return JsonResponse(ugettext('Subject or message is empty.'), errors=error_dict, status=newman_settings.STATUS_FORM_ERROR)
 
     @property
     def applicable_content_types(self):
@@ -359,9 +391,11 @@ class NewmanSite(AdminSite):
         acts = []
         cts = get_cached_list(ContentType)
         for ct in cts:
-            if ct.model_class() and (issubclass(ct.model_class(), Publishable) or '%s.%s' % (ct.app_label, ct.model) in config.NON_PUBLISHABLE_CTS):
+            cls = ct.model_class()
+            if cls and (issubclass(cls, Publishable) or '%s.%s' % (ct.app_label, ct.model) in newman_settings.NON_PUBLISHABLE_CTS):
                 acts.append(ct)
 
         return acts
 
 site = NewmanSite(name="newman")
+site.disable_action('delete_selected')

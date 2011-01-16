@@ -2,8 +2,8 @@ from django.db import models, IntegrityError
 from django.utils.translation import ugettext, ugettext_lazy as _
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.models import User, Group
-from django.conf import settings
 from django.template.defaultfilters import date
+from django.conf import settings
 
 from ella.core.cache.utils import CachedForeignKey
 from ella.core.models import Category
@@ -141,9 +141,8 @@ class CategoryUserRole(models.Model):
         #for p in self.group.permissions.all():
         for p in self.group.permissions.all().iterator():
             code = '%s.%s' % (p.content_type.app_label, p.codename)
-            # Category list is identical for every permission code in CUR's group
-            if not cats:
-                cats = compute_applicable_categories_objects(self.user, code)
+            # Category list is NOT NECESSARILY identical for every permission code in CUR's group
+            cats = compute_applicable_categories_objects(self.user, code)
             #print 'Denormalizing %s for %d categories' % (code, len(cats))
             # create denormalized roles
             for c in cats:

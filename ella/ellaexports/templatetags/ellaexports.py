@@ -5,9 +5,9 @@ from httplib import urlsplit
 
 from django.conf import settings
 from django import template
-from django.utils.encoding import smart_str
-from django.utils.safestring import mark_safe
-from django.template.defaultfilters import stringfilter
+from django.utils.feedgenerator import rfc2822_date
+
+from ella.ellaexports.conf import ellaexports_settings
 
 register = template.Library()
 
@@ -36,8 +36,8 @@ class AtomIdNode(template.Node):
         self.hashed_output = hashed_output
 
     def render(self, context):
-        """ 
-        Example output: tag:zena.cz,2004-05-27:/12/10245 
+        """
+        Example output: tag:zena.cz,2004-05-27:/12/10245
         2004-05-27 ... publication date
         12 ... content type
         10245 ... publishable ID
@@ -88,7 +88,6 @@ class FeedStrftimeNode(template.Node):
         self.formatstring = formatstring
 
     def render(self, context):
-        from ella.ellaexports.models import FEED_DATETIME_FORMAT
         if self.var_name == 'None':
             variable = datetime.now()
         else:
@@ -96,7 +95,7 @@ class FeedStrftimeNode(template.Node):
         if type(variable) != datetime:
             raise AttributeError('Given variable is not datetime object. %s' % variable)
 
-        formatstring = FEED_DATETIME_FORMAT
+        formatstring = ellaexports_settings.FEED_DATETIME_FORMAT
         if self.formatstring:
             formatstring = self.formatstring
         return variable.strftime(str(formatstring))
@@ -156,3 +155,5 @@ def feed_replace_datetime_czech(value):
             out = first_pass.replace(en, cz)
             break
     return out
+
+register.filter(rfc2822_date)
